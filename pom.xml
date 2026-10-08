@@ -21,6 +21,8 @@
         <module>vexelray-sim-rigid-core</module>
         <!-- The simulation on the VexelRay stack: a runner on resident buffers, and a view of what it holds. -->
         <module>vexelray-sim-rigid-gui</module>
+        <!-- The experiments, on screen, with their readings; its timing is Kronometer's. -->
+        <module>vexelray-sim-rigid-demo</module>
     </modules>
 
     <properties>
@@ -31,6 +33,10 @@
         <supirvast.version>0.2.0-SNAPSHOT</supirvast.version>
         <vexelray.gui.version>0.1.0-SNAPSHOT</vexelray.gui.version>
         <vexelray.sim.core.version>0.1.0-SNAPSHOT</vexelray.sim.core.version>
+        <vexelray.version>0.1.0-SNAPSHOT</vexelray.version>
+        <vexelray.framework.version>0.1.0-SNAPSHOT</vexelray.framework.version>
+        <tactroller.version>1.0-SNAPSHOT</tactroller.version>
+        <kronometer.version>1.0-SNAPSHOT</kronometer.version>
 
         <junit.version>5.11.4</junit.version>
 
@@ -46,6 +52,24 @@
                 <groupId>dev.vexelray.sim</groupId>
                 <artifactId>vexelray-sim-rigid-core</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>dev.vexelray.sim</groupId>
+                <artifactId>vexelray-sim-rigid-gui</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <!-- Time: the physics rate, its tempo, and the handoff of its steps to the render thread. -->
+            <dependency>
+                <groupId>sibarum.kronometer</groupId>
+                <artifactId>kronometer-core</artifactId>
+                <version>${kronometer.version}</version>
+            </dependency>
+            <!-- The render target, storage binding and pipeline the view draws through. -->
+            <dependency>
+                <groupId>dev.vexelray</groupId>
+                <artifactId>vexelray-vulkan</artifactId>
+                <version>${vexelray.version}</version>
             </dependency>
 
             <!-- What the simulations share. -->
