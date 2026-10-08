@@ -17,6 +17,16 @@ implementation is chosen from the results. [docs/architecture.md](docs/architect
 It knows nothing of water. A body floating or pushed by a wake is
 [vexelray-sim-physics](../vexelray-sim-physics), which couples this to the fluid.
 
+## Status
+
+**One experiment, measured, and a demo of it.** Spheres with Jacobi XPBD contact are right where an answer is known:
+an exact free fall, a sphere resting on the floor, momentum kept in a collision to 1e-6. They are not yet able to rest
+a stack. A column of twenty sinks a few percent of a radius into itself and jitters, and only 20 substeps nearly
+settle it. There is no broad phase, no rotation, so no friction, and no restitution.
+
+Next is a grid broad phase, with the counting sort moved into SupirVast. After it comes Gauss–Seidel by colour,
+measured against the Jacobi table. [docs/TODO.md](docs/TODO.md) has the numbers and the rest of the list.
+
 ## Running
 
 The stack's siblings must be installed to the local Maven repository first: `supirvast`, `vexelray`, `kronometer`,

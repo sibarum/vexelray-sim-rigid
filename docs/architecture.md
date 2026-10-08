@@ -21,5 +21,15 @@ a high-performance simulation in the same library, with kernels written in Supir
 practice: experiments first, each producing evidence, with its limits written down beside its results. Both hold here
 unchanged.
 
-A step is data (`dev.vexelray.sim.core.step`): passes over named buffers. That is what lets `vexelray-sim-physics`
-interleave this step with the fluid's in one recorded dispatch, without either of them knowing.
+A step is data: passes over named buffers (SupirVast's `dev.supirvast.vastir.pass`), run by SupirVast's `PassRunner`
+on the GPU or the CPU. That is what lets `vexelray-sim-physics` interleave this step with the fluid's in one recorded
+dispatch, without either of them knowing.
+
+## The demo's timing is Kronometer's
+
+The demo does not count time. The physics is a fixed 60 Hz `Rate` inside a `Tempo` the playback speed rescales.
+Its steps reach the render thread, which alone may submit to the GPU, through a `Handoff`: the timeline says a step
+is due, and the frame runs what came due. `Handoff.phase` blends the picture between the last two steps that ran.
+Anything the demo needed that was not a rigid body's went to its natural level: Kronometer (`Handoff`), SupirVast
+(`PassRunner`), and vexelray-sim-core-gui (`OrbitControl`, `AppCompute`, `DemoLook`). vexelray-sim-fluid's demo is
+to be moved onto the same pattern.
