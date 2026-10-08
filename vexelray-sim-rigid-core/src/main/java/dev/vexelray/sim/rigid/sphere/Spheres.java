@@ -5,26 +5,32 @@ import dev.supirvast.vastir.core.Buffer;
 import dev.supirvast.vastir.core.Expr;
 import dev.supirvast.vastir.core.Function;
 import dev.supirvast.vastir.core.LocalVar;
+import dev.supirvast.vastir.pass.CountingSort;
 import dev.supirvast.vastir.type.Type;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import static dev.supirvast.vastir.build.Body.F32;
+import static dev.supirvast.vastir.build.Body.I32;
 import static dev.supirvast.vastir.build.Body.add;
+import static dev.supirvast.vastir.build.Body.and;
 import static dev.supirvast.vastir.build.Body.div;
 import static dev.supirvast.vastir.build.Body.eq;
 import static dev.supirvast.vastir.build.Body.f;
+import static dev.supirvast.vastir.build.Body.floor;
 import static dev.supirvast.vastir.build.Body.gt;
 import static dev.supirvast.vastir.build.Body.i;
 import static dev.supirvast.vastir.build.Body.load;
 import static dev.supirvast.vastir.build.Body.lt;
 import static dev.supirvast.vastir.build.Body.max;
 import static dev.supirvast.vastir.build.Body.min;
+import static dev.supirvast.vastir.build.Body.mod;
 import static dev.supirvast.vastir.build.Body.mul;
 import static dev.supirvast.vastir.build.Body.not;
 import static dev.supirvast.vastir.build.Body.sqrt;
 import static dev.supirvast.vastir.build.Body.sub;
+import static dev.supirvast.vastir.build.Body.toInt;
 import static dev.supirvast.vastir.build.Body.v;
 
 /**
@@ -78,11 +84,16 @@ import static dev.supirvast.vastir.build.Body.v;
  *
  * Which is better for piles and stacks is the experiment's question, and its answer is measured, not assumed.
  *
+ * <h2>Which spheres a solve tests</h2>
+ *
+ * {@link #solve()} tests every other sphere, {@code n²} tests a pass: the simplest thing that is right, and the
+ * reference. {@link #solve(SphereGrid)} tests only the spheres in the 27 cells around a sphere's own, after
+ * {@link #bin} and SupirVast's counting sort have listed the spheres by cell. The two find the same contacts, and
+ * differ only in the order each sphere sums them, so they agree to rounding.
+ *
  * <h2>What it is not, yet</h2>
  *
  * <ul>
- *   <li><b>Every pair is tested.</b> A sphere loops over all the others: {@code n²} tests per pass. There is no broad
- *       phase. It is the simplest thing that is right, so that the solver can be judged before the search is.</li>
  *   <li><b>No rotation, so no friction.</b> A sphere is a point with a radius. Frictionless spheres stack in a column
  *       held by walls, and a pile of them slumps flat; both are the technique, not bugs.</li>
  *   <li><b>No restitution.</b> Every contact is perfectly inelastic.</li>
@@ -95,7 +106,7 @@ import static dev.supirvast.vastir.build.Body.v;
 public final class Spheres {
 
     /** The workgroup every pass must be registered with. Nothing here needs a particular one, nor a subgroup. */
-    public static final int WORKGROUP = 64;
+    public static final int WORKGROUP = CountingSort.BLOCK;
 
     /** {@code [h, gx, gy, gz, sx, sy, sz, omega, averaged]}, see {@link #params}. */
     public static final int PARAM_COUNT = 9;
@@ -179,52 +190,125 @@ public final class Spheres {
     /**
      * One invocation per sphere: the move that would part it from every sphere it overlaps, its share of each by
      * inverse mass, relaxed as the parameters say, into {@code cx, cy, cz}. Reads positions only, so every sphere
-     * sees the same state.
+     * sees the same state. Every other sphere is tested: {@code n²} tests a pass.
      */
     public static Function solve() {
-        List<Buffer> bs = SOLVE_BUFFERS;
-        Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
-        Buffer radius = bs.get(3);
-        Buffer im = bs.get(4);
-        Buffer[] correction = {bs.get(5), bs.get(6), bs.get(7)};
-        Buffer params = bs.get(8);
-
         Body b = new Body();
         LocalVar s = b.let("s", new Expr.InvocationId());
         LocalVar count = b.let("count", new Expr.InvocationCount());
         b.when(lt(v(s), v(count)), t -> {
-            LocalVar[] mine = {t.let("xs", load(at[0], v(s))), t.let("ys", load(at[1], v(s))),
-                    t.let("zs", load(at[2], v(s)))};
-            LocalVar rs = t.let("rs", load(radius, v(s)));
-            LocalVar ws = t.let("ws", load(im, v(s)));
-            LocalVar[] sum = {t.let("sx", f(0)), t.let("sy", f(0)), t.let("sz", f(0))};
-            LocalVar contacts = t.let("contacts", f(0));
+            Solving solving = Solving.begin(t, s, SOLVE_BUFFERS);
             LocalVar o = t.let("o", i(0));
             t.loop(lt(v(o), v(count)), pass -> {
-                pass.when(not(eq(v(o), v(s))), other -> {
-                    LocalVar[] d = new LocalVar[3];
-                    for (int a = 0; a < 3; a++) {
-                        d[a] = other.let("d", sub(v(mine[a]), load(at[a], v(o))));
-                    }
-                    LocalVar d2 = other.let("d2", add(mul(v(d[0]), v(d[0])),
-                            add(mul(v(d[1]), v(d[1])), mul(v(d[2]), v(d[2])))));
-                    LocalVar reach = other.let("reach", add(v(rs), load(radius, v(o))));
-                    LocalVar wsum = other.let("wsum", add(v(ws), load(im, v(o))));
-                    other.when(lt(v(d2), mul(v(reach), v(reach))), near ->
-                            near.when(gt(v(d2), f(COINCIDENT)), apart ->
-                                    apart.when(gt(v(wsum), f(0)), touching -> {
-                                        LocalVar dist = touching.let("dist", sqrt(v(d2)));
-                                        // The overlap, this sphere's share of it, per unit of the separation vector.
-                                        LocalVar share = touching.let("share", div(mul(sub(v(reach), v(dist)),
-                                                div(v(ws), v(wsum))), v(dist)));
-                                        for (int a = 0; a < 3; a++) {
-                                            touching.set(sum[a], add(v(sum[a]), mul(v(share), v(d[a]))));
-                                        }
-                                        touching.set(contacts, add(v(contacts), f(1)));
-                                    })));
-                });
+                solving.against(pass, o);
                 pass.set(o, add(v(o), i(1)));
             });
+            solving.finish(t);
+        });
+        return function("spheresSolve", b);
+    }
+
+    static final String[] GRID_SOLVE_NAMES = {"x", "y", "z", "r", "im", "cx", "cy", "cz", "params", "keys", "starts",
+            "order"};
+    static final List<Buffer> GRID_SOLVE_BUFFERS = bind(GRID_SOLVE_NAMES, 9);
+
+    /**
+     * {@link #solve()}, with the spheres sorted into {@code grid}'s cells: a sphere tests only those in its own
+     * cell and the 26 around it, which is every sphere it can touch while a cell is at least the widest sphere's
+     * diameter. {@code keys} is the cell each sphere was sorted into, and {@code starts} and {@code order} list
+     * each cell's spheres, as {@link #bin} and the sort left them.
+     */
+    public static Function solve(SphereGrid grid) {
+        List<Buffer> bs = GRID_SOLVE_BUFFERS;
+        Buffer keys = bs.get(9);
+        Buffer starts = bs.get(10);
+        Buffer order = bs.get(11);
+        int nx = grid.nx();
+        int ny = grid.ny();
+        int nz = grid.nz();
+
+        Body b = new Body();
+        LocalVar s = b.let("s", new Expr.InvocationId());
+        b.when(lt(v(s), new Expr.InvocationCount()), t -> {
+            Solving solving = Solving.begin(t, s, bs);
+            LocalVar key = t.let("key", load(keys, v(s)));
+            LocalVar ix = t.let("ix", mod(v(key), i(nx)));
+            LocalVar iy = t.let("iy", mod(div(v(key), i(nx)), i(ny)));
+            LocalVar iz = t.let("iz", div(v(key), i(nx * ny)));
+            LocalVar n = t.let("n", i(0));
+            t.loop(lt(v(n), i(27)), around -> {
+                LocalVar jx = around.let("jx", add(v(ix), sub(mod(v(n), i(3)), i(1))));
+                LocalVar jy = around.let("jy", add(v(iy), sub(mod(div(v(n), i(3)), i(3)), i(1))));
+                LocalVar jz = around.let("jz", add(v(iz), sub(div(v(n), i(9)), i(1))));
+                around.when(and(within(jx, nx), and(within(jy, ny), within(jz, nz))), inside -> {
+                    LocalVar cell = inside.let("cell", add(v(jx), mul(i(nx), add(v(jy), mul(i(ny), v(jz))))));
+                    LocalVar k = inside.let("k", load(starts, v(cell)));
+                    LocalVar end = inside.let("end", load(starts, add(v(cell), i(1))));
+                    inside.loop(lt(v(k), v(end)), run -> {
+                        LocalVar o = run.let("o", load(order, v(k)));
+                        solving.against(run, o);
+                        run.set(k, add(v(k), i(1)));
+                    });
+                });
+                around.set(n, add(v(n), i(1)));
+            });
+            solving.finish(t);
+        });
+        return function("spheresGridSolve", b);
+    }
+
+    private static Expr within(LocalVar index, int bound) {
+        return and(not(lt(v(index), i(0))), lt(v(index), i(bound)));
+    }
+
+    /**
+     * One sphere's solve as it goes: what it knows of itself, and the move summed so far. Both searches use it, so
+     * they differ only in which spheres they offer it.
+     */
+    private record Solving(LocalVar s, LocalVar[] mine, LocalVar rs, LocalVar ws, LocalVar[] sum, LocalVar contacts,
+                           Buffer[] at, Buffer radius, Buffer im, Buffer[] correction, Buffer params) {
+
+        /** The first nine bindings are the same in both solves: {@link #SOLVE_NAMES}. */
+        static Solving begin(Body t, LocalVar s, List<Buffer> bs) {
+            Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
+            LocalVar[] mine = {t.let("xs", load(at[0], v(s))), t.let("ys", load(at[1], v(s))),
+                    t.let("zs", load(at[2], v(s)))};
+            LocalVar rs = t.let("rs", load(bs.get(3), v(s)));
+            LocalVar ws = t.let("ws", load(bs.get(4), v(s)));
+            LocalVar[] sum = {t.let("sx", f(0)), t.let("sy", f(0)), t.let("sz", f(0))};
+            LocalVar contacts = t.let("contacts", f(0));
+            return new Solving(s, mine, rs, ws, sum, contacts, at, bs.get(3), bs.get(4),
+                    new Buffer[] {bs.get(5), bs.get(6), bs.get(7)}, bs.get(8));
+        }
+
+        /** Sphere {@code o}'s overlap with this one, if any, and this one's share of the move that parts them. */
+        void against(Body b, LocalVar o) {
+            b.when(not(eq(v(o), v(s))), other -> {
+                LocalVar[] d = new LocalVar[3];
+                for (int a = 0; a < 3; a++) {
+                    d[a] = other.let("d", sub(v(mine[a]), load(at[a], v(o))));
+                }
+                LocalVar d2 = other.let("d2", add(mul(v(d[0]), v(d[0])),
+                        add(mul(v(d[1]), v(d[1])), mul(v(d[2]), v(d[2])))));
+                LocalVar reach = other.let("reach", add(v(rs), load(radius, v(o))));
+                LocalVar wsum = other.let("wsum", add(v(ws), load(im, v(o))));
+                other.when(lt(v(d2), mul(v(reach), v(reach))), near ->
+                        near.when(gt(v(d2), f(COINCIDENT)), apart ->
+                                apart.when(gt(v(wsum), f(0)), touching -> {
+                                    LocalVar dist = touching.let("dist", sqrt(v(d2)));
+                                    // The overlap, this sphere's share of it, per unit of the separation vector.
+                                    LocalVar share = touching.let("share", div(mul(sub(v(reach), v(dist)),
+                                            div(v(ws), v(wsum))), v(dist)));
+                                    for (int a = 0; a < 3; a++) {
+                                        touching.set(sum[a], add(v(sum[a]), mul(v(share), v(d[a]))));
+                                    }
+                                    touching.set(contacts, add(v(contacts), f(1)));
+                                })));
+            });
+        }
+
+        /** The summed move, relaxed as the parameters say, stored as this sphere's correction. */
+        void finish(Body t) {
             LocalVar omega = t.let("omega", load(params, i(OMEGA)));
             LocalVar averaged = t.let("averaged", load(params, i(AVERAGED)));
             LocalVar scale = t.let("scale", v(omega));
@@ -232,8 +316,32 @@ public final class Spheres {
             for (int a = 0; a < 3; a++) {
                 t.store(correction[a], v(s), mul(v(scale), v(sum[a])));
             }
+        }
+    }
+
+    static final String[] BIN_NAMES = {"x", "y", "z", "counts", "keys", "ranks"};
+    static final List<Buffer> BIN_BUFFERS = bind(BIN_NAMES, 3);
+
+    /**
+     * One invocation per sphere: the cell of {@code grid} its centre is in, counted for the sort
+     * ({@link CountingSort#count}). A centre outside the grid is counted in the nearest cell, which is still right:
+     * the cells only decide which spheres are tested, never which touch.
+     */
+    public static Function bin(SphereGrid grid) {
+        List<Buffer> bs = BIN_BUFFERS;
+        int[] cells = {grid.nx(), grid.ny(), grid.nz()};
+        Body b = new Body();
+        LocalVar s = b.let("s", new Expr.InvocationId());
+        b.when(lt(v(s), new Expr.InvocationCount()), t -> {
+            LocalVar[] c = new LocalVar[3];
+            for (int a = 0; a < 3; a++) {
+                c[a] = t.let("c", toInt(max(f(0), min(f(cells[a] - 1),
+                        floor(div(load(bs.get(a), v(s)), f(grid.cell())))))));
+            }
+            Expr key = add(v(c[0]), mul(i(cells[0]), add(v(c[1]), mul(i(cells[1]), v(c[2])))));
+            CountingSort.count(t, v(s), key, bs.get(3), bs.get(4), bs.get(5));
         });
-        return function("spheresSolve", b);
+        return function("spheresBin", b);
     }
 
     /** One invocation per sphere: the solve's move added, then the walls, by projecting the sphere back inside. */
@@ -318,9 +426,14 @@ public final class Spheres {
     // --- building blocks -----------------------------------------------------------------------------------
 
     private static List<Buffer> bind(String... names) {
+        return bind(names, names.length);
+    }
+
+    /** The first {@code floats} names bound as f32, the rest as i32. */
+    private static List<Buffer> bind(String[] names, int floats) {
         List<Buffer> buffers = new ArrayList<>();
         for (int k = 0; k < names.length; k++) {
-            buffers.add(new Buffer(names[k], k, F32));
+            buffers.add(new Buffer(names[k], k, k < floats ? F32 : I32));
         }
         return List.copyOf(buffers);
     }

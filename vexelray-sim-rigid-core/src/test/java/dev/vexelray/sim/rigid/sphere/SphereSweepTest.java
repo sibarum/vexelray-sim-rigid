@@ -7,26 +7,37 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import java.util.Random;
 
 /**
- * The experiment's measurements, not assertions: a column and a pile, under each relaxation and several substep
- * counts, with how deep the spheres sink into each other, how much the stack jitters, and what a step costs.
- * {@code -Drigid.sweep=true} runs it; {@code -Drigid.backend=CPU} runs it on the CPU instead of the GPU.
+ * The experiment's measurements, not assertions: a column and piles, under each relaxation and several substep
+ * counts, every pair tested and over the grid, with how deep the spheres sink into each other, how much the stack
+ * jitters, and what a step costs. {@code -Drigid.sweep=true} runs it; {@code -Drigid.backend=CPU} runs it on the CPU
+ * instead of the GPU.
  */
 @EnabledIfSystemProperty(named = "rigid.sweep", matches = "true")
 class SphereSweepTest {
 
     private static final Backend BACKEND = Backend.valueOf(System.getProperty("rigid.backend", "GPU"));
 
-    private record Solver(String name, double omega, boolean averaged, int substeps, int iterations) {
+    private record Solver(String name, double omega, boolean averaged, int substeps, int iterations, boolean grid) {
     }
 
     private static final Solver[] SOLVERS = {
-            new Solver("constant omega=1", 1, false, 10, 1),
-            new Solver("constant omega=0.5", 0.5, false, 10, 1),
-            new Solver("averaged omega=1", 1, true, 10, 1),
-            new Solver("averaged omega=1", 1, true, 5, 1),
-            new Solver("averaged omega=1", 1, true, 20, 1),
-            new Solver("averaged omega=1 2 it", 1, true, 5, 2),
-            new Solver("averaged omega=1 10 it", 1, true, 1, 10),
+            new Solver("constant omega=1", 1, false, 10, 1, false),
+            new Solver("constant omega=0.5", 0.5, false, 10, 1, false),
+            new Solver("averaged omega=1", 1, true, 10, 1, false),
+            new Solver("averaged omega=1", 1, true, 5, 1, false),
+            new Solver("averaged omega=1", 1, true, 20, 1, false),
+            new Solver("averaged omega=1 2 it", 1, true, 5, 2, false),
+            new Solver("averaged omega=1 10 it", 1, true, 1, 10, false),
+            new Solver("grid averaged omega=1", 1, true, 10, 1, true),
+            new Solver("grid averaged omega=1", 1, true, 20, 1, true),
+    };
+
+    /** The large pile is slow every pair, so only the two settings worth comparing. */
+    private static final Solver[] LARGE = {
+            new Solver("averaged omega=1", 1, true, 10, 1, false),
+            new Solver("averaged omega=1", 1, true, 20, 1, false),
+            new Solver("grid averaged omega=1", 1, true, 10, 1, true),
+            new Solver("grid averaged omega=1", 1, true, 20, 1, true),
     };
 
     /** Twenty spheres in a column a sphere wide, touching, under gravity for three seconds. */
@@ -52,14 +63,23 @@ class SphereSweepTest {
     /** Three hundred and forty-three spheres dropped as a loose lattice into a box, settled for four seconds. */
     @Test
     void pile() {
-        System.out.println("pile of 343, r = 3 cm, 4 s at 60 Hz, " + BACKEND);
+        pile(7, SOLVERS);
+    }
+
+    /** Four thousand and ninety-six spheres, the same way: where testing every pair should cost the most. */
+    @Test
+    void largePile() {
+        pile(16, LARGE);
+    }
+
+    private static void pile(int side, Solver[] solvers) {
+        int n = side * side * side;
+        System.out.println("pile of " + n + ", r = 3 cm, 4 s at 60 Hz, " + BACKEND);
         System.out.println(header());
-        for (Solver solver : SOLVERS) {
-            int side = 7;
-            int n = side * side * side;
+        for (Solver solver : solvers) {
             try (Scene scene = configure(new Scene(n).uniform(0.03, 0.1), solver)) {
-                scene.sx = scene.sz = 0.5;
-                scene.sy = 1.5;
+                scene.sx = scene.sz = 0.08 + 0.06 * side;
+                scene.sy = 0.5 + 0.07 * side;
                 Random random = new Random(7);
                 int k = 0;
                 for (int i = 0; i < side; i++) {
@@ -81,11 +101,12 @@ class SphereSweepTest {
         scene.averaged = solver.averaged();
         scene.substeps = solver.substeps();
         scene.iterations = solver.iterations();
+        scene.grid = solver.grid();
         return scene;
     }
 
     private static String header() {
-        return String.format("%-20s %4s %3s  %-10s %-10s %-10s %-10s %-9s  %s", "solver", "sub", "it", "overlap",
+        return String.format("%-22s %4s %3s  %-10s %-10s %-10s %-10s %-9s  %s", "solver", "sub", "it", "overlap",
                 "wall", "KE end", "vmax end", "ms/step", "");
     }
 
@@ -97,7 +118,7 @@ class SphereSweepTest {
         scene.advance(frames - 2);
         SphereDiagnostics state = scene.diagnostics();
         double ms = (System.nanoTime() - start) / 1e6 / (frames - 2);
-        System.out.println(String.format("%-20s %4d %3d  %-10.2e %-10.2e %-10.2e %-10.2e %-9.3f  %s%s",
+        System.out.println(String.format("%-22s %4d %3d  %-10.2e %-10.2e %-10.2e %-10.2e %-9.3f  %s%s",
                 solver.name(), solver.substeps(), solver.iterations(), state.maxOverlap(), state.maxWall(),
                 state.kinetic(), state.maxSpeed(), ms, extra.apply(scene), state.broken() ? "  BROKEN" : ""));
     }

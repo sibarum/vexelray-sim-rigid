@@ -3,6 +3,7 @@ package dev.vexelray.sim.rigid.gui;
 import dev.supirvast.vastir.tools.Accelerator;
 import dev.supirvast.vastir.tools.GpuContext;
 import dev.supirvast.vastir.tools.PassRunner;
+import dev.vexelray.sim.rigid.sphere.SphereGrid;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
 import dev.vexelray.sim.rigid.sphere.Spheres;
 
@@ -24,10 +25,11 @@ public final class SphereSimulation implements AutoCloseable {
 
     /**
      * @param context the application's device, or null for one of the simulation's own
+     * @param grid    the broad phase's grid, or null to test every pair
      */
-    public SphereSimulation(GpuContext context, int spheres, int substeps, int iterations) {
+    public SphereSimulation(GpuContext context, int spheres, int substeps, int iterations, SphereGrid grid) {
         this.accelerator = context == null ? new Accelerator() : Accelerator.on(context);
-        this.step = new SphereStep(spheres, substeps, iterations);
+        this.step = new SphereStep(spheres, substeps, iterations, grid);
         this.runner = PassRunner.gpu(accelerator, step, Spheres.WORKGROUP, PassRunner.NO_SUBGROUP);
         runner.prepare(step.step());
     }

@@ -4,7 +4,7 @@
 
 `dev.vexelray.sim.rigid.sphere`: spheres in a walled box, kept apart by position-based contact, substepped. Every
 sphere solves its own contacts against the positions as they stood (Jacobi), so a pass is one invocation per sphere
-with no atomics. Every pair is tested. There is no rotation, so no friction, and no restitution. `Spheres`' Javadoc
+with no atomics. There is no rotation, so no friction, and no restitution. `Spheres`' Javadoc
 has the details.
 
 **What holds** (`SpheresTest` on every build, `PileTest` with `-Pphysics`, on the CPU and the GPU):
@@ -45,13 +45,39 @@ energy, which should be zero; the column's mass is 20 kg. Read the table this wa
 - **Only 20 substeps nearly rest**, at 1% overlap. The pile costs 0.67 ms a step for 343 spheres, and that is with
   every pair tested.
 
+## A grid broad phase — built and measured
+
+`SphereGrid`, `Spheres.bin` and `Spheres.solve(SphereGrid)`. Each substep, after predict, every sphere is binned into
+a cell as wide as the widest sphere, and SupirVast's `CountingSort` (moved down from the fluid's `Sort`, and made
+general: the caller computes the key, and the sort can list items by key rather than move them) lists the spheres by
+cell. The solve then tests the 27 cells around a sphere's own. The spheres stay where they are, so a sphere's index
+means the same thing to the tests, the picture and the demo.
+
+**What holds**: `GridTest` steps 600 crowded spheres of mixed sizes, some past the walls, both ways from one state;
+they agree to 1e-5 m, the order of summation being the only difference. With half the neighbour cells left out,
+the test fails by 0.39 m. `PileTest` runs with and without the grid.
+
+**What it costs**, on the GPU, averaged ω = 1, ms a 60 Hz step:
+
+| Scene | Substeps | Every pair | Grid |
+| --- | --- | --- | --- |
+| Column of 20 | 10 / 20 | 0.10 / 0.16 | 0.16 / 0.29 |
+| Pile of 343 | 10 / 20 | 0.36 / 0.67 | 0.27 / 0.46 |
+| Pile of 4096 | 10 / 20 | 3.4 / 6.8 | 0.33 / 0.60 |
+
+- **The sort's cost is its dispatches.** Five passes a substep, about 1 µs each in the recorded sequence, whatever
+  their size: what makes the column dearer with the grid.
+- **Every pair is cheaper on the GPU than n² suggests.** 4096 spheres cost 10× what 343 do, not 140×: the GPU was
+  not full at 343. The grid is still 11× faster at 4096, and the gap only widens.
+- **The broad phase does not settle anything.** The pile of 4096 still has 10% overlap and moving energy after
+  4 s at 20 substeps, either way. That is the solver's, and Gauss–Seidel's to answer.
+
 ## Next
 
 - [ ] **Gauss–Seidel by colour.** Colour the contacts so that no two of a colour share a sphere, then solve one colour
       per pass, so a correction reaches the next sphere within the same pass. The direct answer to "Jacobi hears the
-      stack late", and still parallel. Measured against the table above.
-- [ ] **A broad phase.** A grid of cells with spheres sorted by cell, by the counting sort the fluid already has
-      (`Sort` in vexelray-sim-fluid): its scan is general, and it moves to `vexelray-sim-core` when this asks for it.
+      stack late", and still parallel. The grid gives it each sphere's contacts to colour. Measured against the
+      Jacobi table above.
 - [ ] **Restitution**, as a velocity pass after the position solve, measured on a bounce's height.
 - [ ] **Rotation and friction**: an orientation per body, and friction at contacts, so a pile holds a slope and a
       sphere rolls.
@@ -72,4 +98,5 @@ energy, which should be zero; the column's mass is 20 kg. Read the table this wa
       Still the demo's own, and to be weighed once the fluid's turn shows which parts are shared: `Controls`,
       `Panel`, `Readings` and `Session`. vexelray-sim-fluid's `docs/TODO.md` has the refactor.
 - [ ] **A grid in the picture as well as the solver.** The view tests every sphere for every pixel: 1.4 ms for 343
-      spheres at 768². The broad phase's grid would serve both.
+      spheres at 768², and 4.1 ms for the demo's pile of 1000, now that the solve searches a grid and the picture
+      is the dearer half. The view can read the same `starts` and `order`.

@@ -38,6 +38,8 @@ final class Scene implements AutoCloseable {
     int iterations = 1;
     double omega = 1;
     boolean averaged = true;
+    /** Whether the solve searches a grid, its cells as wide as the widest sphere, or tests every pair. */
+    boolean grid;
 
     private Accelerator accelerator;
     private PassRunner runner;
@@ -63,8 +65,17 @@ final class Scene implements AutoCloseable {
         return this;
     }
 
+    /** The widest sphere's diameter. */
+    double widest() {
+        double widest = 0;
+        for (float radius : r) {
+            widest = Math.max(widest, 2 * radius);
+        }
+        return widest;
+    }
+
     Scene start(Backend backend) {
-        step = new SphereStep(n, substeps, iterations);
+        step = new SphereStep(n, substeps, iterations, grid ? SphereGrid.covering(sx, sy, sz, widest()) : null);
         if (backend == Backend.CPU) {
             runner = PassRunner.cpu(step, Spheres.WORKGROUP, PassRunner.NO_SUBGROUP);
         } else {

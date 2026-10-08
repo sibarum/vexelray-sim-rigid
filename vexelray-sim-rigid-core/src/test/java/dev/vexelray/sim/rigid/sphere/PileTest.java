@@ -3,7 +3,7 @@ package dev.vexelray.sim.rigid.sphere;
 import dev.vexelray.sim.rigid.sphere.Scene.Backend;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.Random;
 
@@ -18,18 +18,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class PileTest {
 
     /**
-     * A hundred and twenty-five spheres dropped as a loose lattice into a box, for three seconds. Nothing goes
-     * non-finite, nothing leaves the box, no sphere passes into another by more than a fifth of a radius, and the
-     * pile ends with less energy than it started with: contact only ever takes energy away.
+     * A hundred and twenty-five spheres dropped as a loose lattice into a box, for three seconds, with every pair
+     * tested and with the grid. Nothing goes non-finite, nothing leaves the box, no sphere passes into another by
+     * more than a fifth of a radius, and the pile ends with less energy than it started with: contact only ever
+     * takes energy away.
      */
     @ParameterizedTest
-    @EnumSource(Backend.class)
-    void aDroppedPileStaysInsideApartAndLosesEnergy(Backend backend) {
+    @CsvSource({"CPU, false", "CPU, true", "GPU, false", "GPU, true"})
+    void aDroppedPileStaysInsideApartAndLosesEnergy(Backend backend, boolean grid) {
         int side = 5;
         try (Scene scene = new Scene(side * side * side).uniform(0.03, 0.1)) {
             scene.sx = scene.sz = 0.4;
             scene.sy = 1;
             scene.substeps = 20;
+            scene.grid = grid;
             Random random = new Random(11);
             int k = 0;
             for (int i = 0; i < side; i++) {

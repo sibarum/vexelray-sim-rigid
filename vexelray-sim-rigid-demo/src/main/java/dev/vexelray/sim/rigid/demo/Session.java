@@ -154,7 +154,8 @@ final class Session implements AutoCloseable {
             scenario = wantedScenario;
             wantedSubsteps = substeps;
             wantedIterations = iterations;
-            builds.start(() -> new Built(new SphereSimulation(context, from.n, substeps, iterations), wantedScenario,
+            builds.start(() -> new Built(new SphereSimulation(context, from.n, substeps, iterations,
+                    from.grid()), wantedScenario,
                     from, carry));
         }
     }

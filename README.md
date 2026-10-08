@@ -10,7 +10,7 @@ implementation is chosen from the results. [docs/architecture.md](docs/architect
 
 | Module | What it holds |
 | --- | --- |
-| `vexelray-sim-rigid-core` | The kernels, in SupirVast IR, and the diagnostics that judge a state. No engine, no window. So far: spheres in a walled box, with position-based contact (Jacobi XPBD), substepped. |
+| `vexelray-sim-rigid-core` | The kernels, in SupirVast IR, and the diagnostics that judge a state. No engine, no window. So far: spheres in a walled box, with position-based contact (Jacobi XPBD), substepped, and a grid broad phase. |
 | `vexelray-sim-rigid-gui` | The simulation on the stack: `SphereSimulation` steps it on resident buffers on the window's own GPU, and `SphereView` ray-traces the spheres straight from the simulation's buffer, blended between the last two steps. |
 | `vexelray-sim-rigid-demo` | A framework application: the scenarios, the solver's settings beside the readings they move. Its timing is Kronometer's. The physics is a fixed 60 Hz rate inside a tempo the playback speed scales, and a `Handoff` gives its steps to the render thread, which owns the GPU. |
 
@@ -19,13 +19,14 @@ It knows nothing of water. A body floating or pushed by a wake is
 
 ## Status
 
-**One experiment, measured, and a demo of it.** Spheres with Jacobi XPBD contact are right where an answer is known:
-an exact free fall, a sphere resting on the floor, momentum kept in a collision to 1e-6. They are not yet able to rest
-a stack. A column of twenty sinks a few percent of a radius into itself and jitters, and only 20 substeps nearly
-settle it. There is no broad phase, no rotation, so no friction, and no restitution.
+**One experiment and a broad phase, measured, and a demo of them.** Spheres with Jacobi XPBD contact are right where
+an answer is known: an exact free fall, a sphere resting on the floor, momentum kept in a collision to 1e-6. They are
+not yet able to rest a stack. A column of twenty sinks a few percent of a radius into itself and jitters, and only 20
+substeps nearly settle it. A grid broad phase, on a counting sort that now lives in SupirVast, finds the same contacts
+as testing every pair, 11× faster at 4096 spheres. There is no rotation, so no friction, and no restitution.
 
-Next is a grid broad phase, with the counting sort moved into SupirVast. After it comes Gauss–Seidel by colour,
-measured against the Jacobi table. [docs/TODO.md](docs/TODO.md) has the numbers and the rest of the list.
+Next is Gauss–Seidel by colour, its contacts from the grid, measured against the Jacobi table.
+[docs/TODO.md](docs/TODO.md) has the numbers and the rest of the list.
 
 ## Running
 

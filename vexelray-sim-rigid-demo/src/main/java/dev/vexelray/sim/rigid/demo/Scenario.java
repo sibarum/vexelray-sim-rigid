@@ -1,5 +1,7 @@
 package dev.vexelray.sim.rigid.demo;
 
+import dev.vexelray.sim.rigid.sphere.SphereGrid;
+
 import java.util.Random;
 
 /**
@@ -31,8 +33,8 @@ enum Scenario {
         }
     },
 
-    BIG_PILE("Pile of 1000", "The same, three times as many. Every pair is tested, so a step costs nine times as much:"
-            + " the reason the solver will need a broad phase.") {
+    BIG_PILE("Pile of 1000", "The same, three times as many. The solve searches a grid, so a step costs about three"
+            + " times as much, not the nine that testing every pair would; the picture still tests every sphere.") {
         @Override
         State start() {
             return block(10, 0.025, 0.05, 0.6, 1.8);
@@ -99,6 +101,15 @@ enum Scenario {
             z[k] = (float) pz;
             r[k] = (float) radius;
             im[k] = (float) (1 / mass);
+        }
+
+        /** The broad phase's grid over the box, its cells as wide as the widest sphere. */
+        SphereGrid grid() {
+            float widest = 0;
+            for (float radius : r) {
+                widest = Math.max(widest, 2 * radius);
+            }
+            return SphereGrid.covering(extent[0], extent[1], extent[2], widest);
         }
     }
 }
