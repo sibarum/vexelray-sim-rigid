@@ -1,0 +1,82 @@
+package dev.vexelray.sim.rigid.sphere;
+
+import dev.supirvast.vastir.build.Body;
+import dev.supirvast.vastir.pass.BufferSpec;
+import dev.supirvast.vastir.pass.Buffered;
+import dev.supirvast.vastir.pass.Pass;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * A whole {@link Spheres} step as data: which kernel, over which named buffers, with how many invocations, in order.
+ * Nothing here runs anything.
+ *
+ * <p>A sphere carries {@code x, y, z}, the velocity {@code u, v, w}, its radius {@code r} and inverse mass
+ * {@code im}; {@code cx, cy, cz} are the solve's scratch, and {@code dx, dy, dz} the substep's constraint moves,
+ * zero between substeps. {@code shown} is for a picture, {@link Spheres#SHOWN_STRIDE} floats a sphere. The
+ * parameters' {@code h} is the substep, so a step advances {@code substeps · h} seconds.
+ */
+public final class SphereStep implements Buffered {
+
+    public final int spheres;
+    public final int substeps;
+    public final int iterations;
+
+    private final Map<String, BufferSpec> buffers = new LinkedHashMap<>();
+    private final List<Pass> step;
+
+    /** {@code substeps} substeps of one solve each: XPBD's own recommendation, and the default. */
+    public SphereStep(int spheres, int substeps) {
+        this(spheres, substeps, 1);
+    }
+
+    /** {@code substeps} substeps, each of {@code iterations} solve-and-apply pairs. */
+    public SphereStep(int spheres, int substeps, int iterations) {
+        if (spheres < 1 || substeps < 1 || iterations < 1) {
+            throw new IllegalArgumentException("a step needs spheres, substeps and iterations, got " + spheres + ", "
+                    + substeps + ", " + iterations);
+        }
+        this.spheres = spheres;
+        this.substeps = substeps;
+        this.iterations = iterations;
+        for (String field : Spheres.SPHERE) {
+            buffers.put(field, new BufferSpec(field, Body.F32, spheres));
+        }
+        buffers.put("params", new BufferSpec("params", Body.F32, Spheres.PARAM_COUNT));
+        buffers.put("shown", new BufferSpec("shown", Body.F32, Spheres.SHOWN_STRIDE * spheres));
+
+        Pass predict = new Pass("predict", Spheres.predict(), Spheres.PREDICT_BUFFERS,
+                List.of(Spheres.PREDICT_NAMES), spheres);
+        Pass solve = new Pass("solve", Spheres.solve(), Spheres.SOLVE_BUFFERS, List.of(Spheres.SOLVE_NAMES), spheres);
+        Pass apply = new Pass("apply", Spheres.apply(), Spheres.APPLY_BUFFERS, List.of(Spheres.APPLY_NAMES), spheres);
+        Pass velocity = new Pass("velocity", Spheres.velocity(), Spheres.VELOCITY_BUFFERS,
+                List.of(Spheres.VELOCITY_NAMES), spheres);
+        List<Pass> passes = new ArrayList<>();
+        for (int sub = 0; sub < substeps; sub++) {
+            passes.add(predict);
+            for (int it = 0; it < iterations; it++) {
+                passes.add(solve);
+                passes.add(apply);
+            }
+            passes.add(velocity);
+        }
+        passes.add(new Pass("show", Spheres.show(), Spheres.SHOW_BUFFERS, List.of(Spheres.SHOW_NAMES), spheres));
+        step = List.copyOf(passes);
+    }
+
+    @Override
+    public Map<String, BufferSpec> buffers() {
+        return buffers;
+    }
+
+    /**
+     * One step: per substep, predict, then solve and apply {@link #iterations} times, then velocity; and once at the
+     * end, {@link Spheres#show show}, for a picture.
+     */
+    public List<Pass> step() {
+        return step;
+    }
+}
