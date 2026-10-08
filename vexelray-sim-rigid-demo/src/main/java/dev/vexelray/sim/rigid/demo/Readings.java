@@ -6,8 +6,6 @@ import dev.vexelray.gui.core.layout.LayoutEnums.Direction;
 import dev.vexelray.gui.core.layout.Length;
 import dev.vexelray.gui.core.style.Role;
 import dev.vexelray.sim.core.gui.DemoLook;
-import dev.vexelray.sim.rigid.gui.SphereSimulation;
-import dev.vexelray.sim.rigid.sphere.SphereDiagnostics;
 
 import java.util.EnumMap;
 import java.util.Map;
@@ -49,27 +47,28 @@ final class Readings {
         return panel;
     }
 
-    /** Before the first simulation of a scenario has been made. */
-    void waiting(Scenario scenario) {
-        set(Line.ABOUT, scenario.about);
-        set(Line.TIME, "Building the kernels…");
-    }
-
-    void show(Scenario scenario, SphereDiagnostics d, double simulated, SphereSimulation sim, double stepMillis,
-              double drawMillis, int drained, long dropped, boolean paused, boolean drawn) {
-        set(Line.ABOUT, scenario.about);
+    /**
+     * What the physics lane last reported, and what the picture costs the frame. While a simulation is being made,
+     * only that it is.
+     */
+    void show(PhysicsNews.Report r, double drawMillis, boolean paused) {
+        set(Line.ABOUT, r.scenario().about);
+        set(Line.PROBLEM, !r.problem().isEmpty() ? r.problem()
+                : r.state() != null && r.state().broken() ? "A position or velocity is not a number." : "");
+        if (r.building()) {
+            set(Line.TIME, "Building the kernels…");
+            return;
+        }
         set(Line.TIME, String.format("%s %.2f s simulated · %d spheres · %d×%d per step", paused ? "Paused at" : "",
-                simulated, sim.spheres(), sim.substeps(), sim.iterations()).trim());
-        set(Line.OVERLAP, String.format("Deepest overlap   %5.1f%% of a radius", 100 * d.maxOverlap()));
-        set(Line.ENERGY, String.format("Moving energy     %.2e J", d.kinetic()));
-        set(Line.SPEED, String.format("Fastest sphere    %.3f m/s", d.maxSpeed()));
-        set(Line.COST, String.format("A step %.2f ms · the picture %.2f ms · %d steps this frame", stepMillis,
-                drawMillis, drained));
-        set(Line.DROPPED, String.format("Steps dropped     %d", dropped));
-        String problem = d.broken() ? "A position or velocity is not a number."
-                : !drawn ? "This GPU cannot compute where it draws, so there is no picture, only these numbers."
-                : "";
-        set(Line.PROBLEM, problem);
+                r.simulated(), r.spheres(), r.substeps(), r.iterations()).trim());
+        if (r.state() != null) {
+            set(Line.OVERLAP, String.format("Deepest overlap   %5.1f%% of a radius", 100 * r.state().maxOverlap()));
+            set(Line.ENERGY, String.format("Moving energy     %.2e J", r.state().kinetic()));
+            set(Line.SPEED, String.format("Fastest sphere    %.3f m/s", r.state().maxSpeed()));
+        }
+        set(Line.COST, String.format("A step %.2f ms (%.2f on the GPU) · the picture %.2f ms", r.stepMillis(),
+                r.gpuMillis(), drawMillis));
+        set(Line.DROPPED, String.format("Steps dropped     %d (the world slowed)", r.dropped()));
     }
 
     private void set(Line line, String text) {

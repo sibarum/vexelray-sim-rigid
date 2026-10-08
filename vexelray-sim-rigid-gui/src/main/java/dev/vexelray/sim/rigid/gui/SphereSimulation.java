@@ -3,8 +3,13 @@ package dev.vexelray.sim.rigid.gui;
 import dev.supirvast.vastir.pass.Pass;
 import dev.supirvast.vastir.tools.Accelerator;
 import dev.supirvast.vastir.tools.Completion;
+import dev.supirvast.vastir.tools.DispatchSequence;
 import dev.supirvast.vastir.tools.GpuContext;
+import dev.supirvast.vastir.tools.KernelColumn;
+import dev.supirvast.vastir.tools.KernelHandle;
+import dev.supirvast.vastir.tools.KernelSpec;
 import dev.supirvast.vastir.tools.PassRunner;
+import dev.supirvast.vastir.tools.ResidentBuffer;
 import dev.vexelray.sim.rigid.sphere.SphereGrid;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
 import dev.vexelray.sim.rigid.sphere.SphereStepper;
@@ -55,6 +60,12 @@ public final class SphereSimulation implements AutoCloseable {
     private int submissions;
     private long gpuNanos;
     private final List<Completion> unread = new ArrayList<>();
+
+    // The ring a finished step is kept in for a picture ({@link #keep}); null until the first keep makes it.
+    private ResidentBuffer[] slots;
+    private DispatchSequence[] keeps;
+    private KernelHandle keeper;
+    private GpuContext.Timeline timeline;
 
     /**
      * Jacobi over {@code grid}, or every pair without one: what the demo has run from the start.
@@ -221,6 +232,50 @@ public final class SphereSimulation implements AutoCloseable {
                 runner.floats("v"), runner.floats("w")};
     }
 
+    /**
+     * Keeps the last step's {@code shown} in slot {@code slot} of this simulation's ring ({@link ShownRing}) and
+     * sets its timeline to {@code value} once that is done, on the GPU, after everything submitted before. The ring is
+     * made by the first call: {@link ShownRing#SLOTS} buffers, and a timeline that starts at zero.
+     *
+     * @return the copy's completion: the step is the picture's to take once it is done
+     */
+    public Completion keep(int slot, long value) {
+        if (slots == null) {
+            slots = new ResidentBuffer[ShownRing.SLOTS];
+            keeps = new DispatchSequence[ShownRing.SLOTS];
+            int words = Spheres.SHOWN_STRIDE * step.spheres;
+            keeper = accelerator.register(new KernelSpec(Spheres.keep(), List.of(
+                    KernelColumn.output("shown", 0, Spheres.KEEP_BUFFERS.get(0).element()).withLength(words),
+                    KernelColumn.output("slot", 1, Spheres.KEEP_BUFFERS.get(1).element()).withLength(words)))
+                    .withWorkgroupSize(Spheres.WORKGROUP)).orElseThrow();
+            timeline = accelerator.timeline(0);
+            for (int k = 0; k < slots.length; k++) {
+                slots[k] = accelerator.allocate(dev.supirvast.vastir.build.Body.F32, words);
+                keeps[k] = accelerator.sequence().dispatch(keeper, List.of(runner.resident("shown"), slots[k]), words)
+                        .build();
+            }
+        }
+        return keeps[slot].run(List.of(), List.of(timeline.at(value)));
+    }
+
+    /**
+     * This simulation's ring, as a picture binds it: the slots' buffers and the timeline, once {@link #keep} has made
+     * them. The buffers and the timeline are this simulation's, freed by {@link #close}.
+     *
+     * @param id     the generation's number, which the ring counts
+     * @param extent the box, {@code sx, sy, sz}, in metres
+     */
+    public ShownRing.Generation generation(long id, double[] extent) {
+        if (slots == null) {
+            throw new IllegalStateException("no step has been kept yet, so there is no ring");
+        }
+        long[] handles = new long[slots.length];
+        for (int k = 0; k < slots.length; k++) {
+            handles[k] = slots[k].vkBuffer();
+        }
+        return new ShownRing.Generation(id, handles, timeline.handle(), step.spheres, extent);
+    }
+
     /** The Vulkan buffer a picture binds: {@link Spheres#SHOWN_STRIDE} floats a sphere. */
     public long shownBuffer() {
         return runner.resident("shown").vkBuffer();
@@ -228,6 +283,17 @@ public final class SphereSimulation implements AutoCloseable {
 
     @Override
     public void close() {
+        if (keeps != null) {
+            runner.finish();
+            for (DispatchSequence keep : keeps) {
+                keep.close();
+            }
+            for (ResidentBuffer slot : slots) {
+                slot.close();
+            }
+            accelerator.release(keeper);
+            timeline.close();
+        }
         runner.close();
         accelerator.close();
     }

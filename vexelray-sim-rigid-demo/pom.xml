@@ -75,6 +75,22 @@
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <!-- The framework's annotation processor: it generates RigidDemoWiring from Recipes and Physics,
+                         and what its vocabulary calls a compile error is one. Named rather than found, because since
+                         JDK 23 javac runs no processor it merely finds on the class path. -->
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>dev.vexelray.framework</groupId>
+                            <artifactId>vexelray-framework-processor</artifactId>
+                            <version>${vexelray.framework.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
                     <argLine>--enable-native-access=ALL-UNNAMED</argLine>

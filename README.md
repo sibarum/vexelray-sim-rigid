@@ -11,8 +11,8 @@ implementation is chosen from the results. [docs/architecture.md](docs/architect
 | Module | What it holds |
 | --- | --- |
 | `vexelray-sim-rigid-core` | The kernels, in SupirVast IR, and the diagnostics that judge a state. No engine, no window. So far: spheres in a walled box, with position-based contact (XPBD, Jacobi or Gauss–Seidel), substepped, and a grid broad phase. |
-| `vexelray-sim-rigid-gui` | The simulation on the stack: `SphereSimulation` steps it on resident buffers on the window's own GPU, and `SphereView` ray-traces the spheres straight from the simulation's buffer, blended between the last two steps. |
-| `vexelray-sim-rigid-demo` | A framework application: the scenarios, the solver's settings beside the readings they move. Its timing is Kronometer's. The physics is a fixed 60 Hz rate inside a tempo the playback speed scales, and a `Handoff` gives its steps to the render thread, which owns the GPU. |
+| `vexelray-sim-rigid-gui` | The simulation on the stack: `SphereSimulation` steps it on resident buffers on the window's own GPU, every contact solved, and keeps each finished step in a `ShownRing`; `SphereView` ray-traces the spheres straight from the ring's newest slot, blended between that step and the one before. |
+| `vexelray-sim-rigid-demo` | A framework application: the scenarios, the solver's settings beside the readings they move. The physics is a `@Component` on a lane of its own, on the compute queue the application lends it, and the frame never waits for it. The clock is Kronometer's: a fixed 60 Hz rate inside a tempo the playback speed scales, whose due steps the frame counts for the physics lane to run. |
 
 It knows nothing of water. A body floating or pushed by a wake is
 [vexelray-sim-physics](../vexelray-sim-physics), which couples this to the fluid.
@@ -30,9 +30,10 @@ invocation per contact, rests the column with under a millionth of Jacobi's movi
 On a pile of 4096 it costs 1.2 ms a step at 10 substeps, about twice what Jacobi costs for the same overlap. The
 demo runs Jacobi on the grid. There is no rotation, so no friction, and no restitution.
 
-Next is the physics timing in [docs/physics-timing.md](docs/physics-timing.md): every contact solved every step, a
-second Vulkan queue, and time that dilates rather than frames that drop. [docs/TODO.md](docs/TODO.md) has the
-numbers and the rest of the list.
+The physics timing in [docs/physics-timing.md](docs/physics-timing.md) is four stages in: every contact solved every
+step, physics on a second Vulkan queue and a thread of its own, and finished steps handed to the frame through a
+ring, so the frame rate holds while physics runs. Next is the clock that counts game time by finished steps, so that
+time dilates rather than frames drop. [docs/TODO.md](docs/TODO.md) has the numbers and the rest of the list.
 
 ## Running
 

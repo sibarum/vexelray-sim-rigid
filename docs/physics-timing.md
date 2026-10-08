@@ -154,6 +154,60 @@ Not yet:
 
 ### 4. Handing states to the frame without waiting
 
+**Built** (SupirVast, vexelray, and this repo; the demo runs on it).
+
+- **`ShownRing`** hands finished steps from the physics lane to the frame. It has three slots and three roles:
+  - **Front:** the slot the frame reads.
+  - **Ready:** the newest finished step the frame has not taken.
+  - **Back:** a free slot, where the next step is kept.
+
+  The writer never writes the front or the ready slot, so neither side ever waits for the other. A step the frame
+  never took is overwritten: the frame shows the newest finished step, not every step. `ShownRingTest` holds all of
+  this with no device.
+- **One slot is enough, not two.** `shown` already holds each sphere before and after its step, so a slot is a copy
+  of it (`Spheres.keep`, `SphereSimulation.keep(slot, value)`). The copy signals the simulation's timeline at the
+  step's number.
+- **The frame's wait is inside the GPU, and already met.** `SampledColorTarget.renderInto` takes a timeline and a
+  value, and the draw's fragment stage waits for it. Physics publishes a step only once the step is known done, so
+  the wait never holds the frame. It is what makes one queue's writes visible to the other.
+  - `renderInto` still waits on its own fence for its own draw. That is the picture's cost, not physics'.
+  - It is also what lets the ring free a slot the moment the frame takes the next one.
+- **Generations.** A new simulation brings its own ring buffers. The old simulation is closed only once the frame
+  has taken from the new one, so a buffer is never freed under a frame.
+- **The demo is the first application with a component**, and its wiring is now generated:
+  - **`Physics`**, on lane `physics`, is lent the `ComputeQueue`. It builds, steps back to back up to what the clock
+    has made due, keeps each step in the ring, and reports its readings through `PhysicsNews`.
+  - **`Session`**, on the main thread, tells it what is due (`Allow`), what to build (`Build`) and how to relax
+    (`Relax`), and draws the ring's newest step.
+  - When physics is more than two steps behind, it drops the steps it owes rather than run them in a burst: the
+    world slows. Stage 5's dilated clock replaces both this and the blend's measure (the last interval between
+    steps).
+
+**Measured**, in the demo on the laptop (RTX 5070 Ti, 144 Hz display):
+
+| Scene | A step, wall / GPU | The picture | Frames a second |
+| --- | --- | --- | --- |
+| Column of 20 | 1.0 / 0.3 ms | about 4 ms (1.2 ms paused) | 140 |
+| Pile of 1000 | 3 / 1.7 ms | about 3.5 ms | 140 |
+
+- **The frame rate holds while physics runs,** at the display's rate, to within the second-by-second noise.
+  - A frame's longest each second is about 20 ms. Ottermate's own polling was running and is a likely cause; it
+    has not been measured apart.
+  - Switching scenario costs the world a second: the build is on the physics lane, and the world waits for it.
+  - The frame does not wait for the build, apart from one 200 ms frame seen at a switch, which is not explained yet.
+- **The picture costs more while physics runs.** On the column it rose from 1.2 ms to about 4. Both queues share
+  the GPU, and the draw's fence wait now includes waiting its turn. Slicing (stage 3) is the lever, and its size
+  against frame time is still to be measured.
+- **A finding on the way.** The framework closes parts in reverse order of construction, so a part built before
+  the window, here the tree, is closed after the device. It must not hold anything made on the device. The view's
+  pipeline did, and destroying it crashed the driver at exit. The session, built after the device, now closes it.
+
+Not yet:
+
+- **The backend on another device**, with the hand-back through the host: stage 6.
+- **A frame that stops waiting for its own draw** would need a release signal before a slot could be reused.
+  `ShownRing`'s Javadoc says so.
+
 - At the end of each step, `shown` is copied into the next slot of a small ring (three slots to start), and the
   step signals its timeline value.
 - The frame draws from the two newest finished slots. Its graphics submission waits on the timeline value of the

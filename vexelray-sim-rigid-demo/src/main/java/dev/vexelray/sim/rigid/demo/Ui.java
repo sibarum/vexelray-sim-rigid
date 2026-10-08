@@ -1,11 +1,5 @@
 package dev.vexelray.sim.rigid.demo;
 
-import dev.vexelray.framework.api.FrameStage;
-import dev.vexelray.framework.automation.Driver;
-import dev.vexelray.framework.shell.AppInfo;
-import dev.vexelray.framework.shell.Appearance;
-import dev.vexelray.framework.shell.Shell;
-import dev.vexelray.framework.shell.Wiring;
 import dev.vexelray.gui.core.Gui;
 import dev.vexelray.gui.core.Node;
 import dev.vexelray.gui.core.layout.LayoutEnums.AlignItems;
@@ -13,21 +7,18 @@ import dev.vexelray.gui.core.layout.LayoutEnums.Direction;
 import dev.vexelray.gui.core.layout.Length;
 import dev.vexelray.gui.core.layout.Rect;
 import dev.vexelray.gui.core.style.Role;
+import dev.vexelray.gui.widget.TitleBar;
 import dev.vexelray.sim.core.gui.DemoLook;
 import dev.vexelray.sim.core.gui.Orbit;
 import dev.vexelray.sim.core.gui.OrbitControl;
 import dev.vexelray.sim.rigid.gui.SphereView;
 import sibarum.tactroller.api.Key;
 
-import java.util.Set;
-
 /**
- * What the demo builds, and in which phase: the controls are state, so {@code MODEL}; the tree and the keys need only
- * the {@code Gui}, so {@code TREE}; the simulation needs the window's device and the clock, so {@code ATTACH}.
+ * The tree: the picture on the left, the panel on the right, and the keys. Needs the {@code Gui} and no window, so it
+ * is built before there is one; the picture's target is made the first time it is drawn.
  */
-final class RigidDemoWiring extends Wiring {
-
-    private static final AppInfo INFO = new AppInfo(RigidDemo.APP, RigidDemo.TITLE, RigidDemo.W, RigidDemo.H, Set.of());
+final class Ui implements AutoCloseable {
 
     /** The side of the square target the spheres are traced into. */
     private static final int VIEW_PIXELS = 768;
@@ -35,35 +26,22 @@ final class RigidDemoWiring extends Wiring {
     /** The most of the body's width the picture takes; the panel has the rest, and grows into anything left over. */
     private static final float VIEW_MAX_SHARE = 0.64f;
 
-    private final Controls controls = new Controls();
-    private final Orbit orbit = new Orbit();
-    private SphereView view;
-    private Readings readings;
-    private Panel panel;
-    private Node canvas;
-    private Node body;
+    private final Node canvas;
+    private final Node body;
+    private final SphereView view;
+    private final OrbitControl orbitControl;
+    private final Readings readings;
+    private final Panel panel;
     private float side = -1f;
 
-    @Override
-    public AppInfo info() {
-        return INFO;
-    }
-
-    @Override
-    public void config(Shell shell) {
-        shell.appearance(Appearance.of(DemoLook.THEME, Length.em(60), Length.em(36)));
-    }
-
-    @Override
-    public void tree(Shell shell) {
-        Gui gui = shell.gui();
+    Ui(Gui gui, TitleBar titleBar, Controls controls, Orbit orbit) {
         canvas = gui.box()
                 .corner(DemoLook.CORNER)
                 .clip(true)
                 .background(gui.theme().color(Role.WELL));
         gui.landmark("view", canvas);
         view = new SphereView(canvas, VIEW_PIXELS, orbit);
-        shell.disposer().register(new OrbitControl(gui, canvas, orbit));
+        orbitControl = new OrbitControl(gui, canvas, orbit);
         readings = new Readings(gui);
         panel = new Panel(gui, controls, readings);
 
@@ -75,18 +53,20 @@ final class RigidDemoWiring extends Wiring {
         gui.onResize(body, layout -> fit());
         gui.root().direction(Direction.COLUMN)
                 .background(gui.theme().color(Role.PAGE))
-                .children(shell.titleBar().node(), body);
-        keys(gui);
+                .children(titleBar.node(), body);
+        keys(gui, controls, orbit);
     }
 
-    @Override
-    public void attach(Shell shell) {
-        Session session = shell.disposer().register(new Session(shell, controls, view, readings));
-        shell.disposer().register(view);
-        shell.hooks().add(FrameStage.APP, panel::sync);
-        shell.hooks().add(FrameStage.APP, session::frame);
-        // The driving socket, off unless --automation asks for it.
-        shell.disposer().register(Driver.open(shell));
+    SphereView view() {
+        return view;
+    }
+
+    Readings readings() {
+        return readings;
+    }
+
+    Panel panel() {
+        return panel;
     }
 
     /**
@@ -108,12 +88,22 @@ final class RigidDemoWiring extends Wiring {
     }
 
     /** Every key only records a request; see {@link Controls}. */
-    private void keys(Gui gui) {
+    private static void keys(Gui gui, Controls controls, Orbit orbit) {
         gui.shortcut(Key.SPACE, controls::togglePause);
         gui.shortcut(Key.R, controls::reset);
         gui.shortcut(Key.N, controls::nextScenario);
         gui.shortcut(Key.EQUAL, controls::faster);
         gui.shortcut(Key.MINUS, controls::slower);
         gui.shortcut(Key.H, orbit::home);
+    }
+
+    /**
+     * The orbit's input. Not the view: its pipeline and bindings are made on the window's device the first time it
+     * draws, and this part is built before the device exists, so it is closed after the device is. {@link Session},
+     * which draws it and is built after the device, closes it.
+     */
+    @Override
+    public void close() {
+        orbitControl.close();
     }
 }

@@ -874,6 +874,22 @@ public final class Spheres {
         return function("spheresShow", b);
     }
 
+    /** {@code shown}, and the slot of a ring a finished step is kept in, for {@link #keep}. */
+    public static final String[] KEEP_NAMES = {"shown", "slot"};
+    public static final List<Buffer> KEEP_BUFFERS = bind(KEEP_NAMES);
+
+    /**
+     * One invocation per word of {@code shown}: the whole of it copied into {@code slot}, where a picture can read a
+     * finished step while the next one writes {@code shown} again.
+     */
+    public static Function keep() {
+        List<Buffer> bs = KEEP_BUFFERS;
+        Body b = new Body();
+        LocalVar k = b.let("k", new Expr.InvocationId());
+        b.when(lt(v(k), new Expr.InvocationCount()), t -> t.store(bs.get(1), v(k), load(bs.get(0), v(k))));
+        return function("spheresKeep", b);
+    }
+
     // --- building blocks -----------------------------------------------------------------------------------
 
     private static List<Buffer> bind(String... names) {

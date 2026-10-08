@@ -9,11 +9,13 @@ import dev.vexelray.vulkan.present.GraphicsPipeline;
 import dev.vexelray.vulkan.present.SampledColorTarget;
 
 /**
- * Spheres on screen, ray-traced straight from the simulation's own buffer into a target a node shows.
+ * Spheres on screen, ray-traced straight from a finished step into a target a node shows.
  *
- * <p>The state is never copied to the host for this: the view binds {@link SphereSimulation#shownBuffer} and reads it
- * where the last step left it, so the cost of the picture is one fullscreen pass. That works only because the
- * simulation computes on the device the application draws on.
+ * <p>The state is never copied to the host for this: the view binds the ring slot ({@link ShownRing}) the newest
+ * finished step was kept in, and reads it where it is, so the cost of the picture is one fullscreen pass. That works
+ * only because the simulation computes on the device the application draws on. The draw waits for the step's
+ * timeline value inside the GPU, which the step reached before it was published, so the frame never waits for
+ * physics: it draws the newest step there is.
  *
  * <p>The camera is an {@link Orbit}, of a box scaled so its longest side is two units across and centred on the
  * origin; this view turns that into the simulation's own coordinates, in metres, and the shader works there.
@@ -29,8 +31,9 @@ public final class SphereView implements AutoCloseable {
 
     private SampledColorTarget target;
     private GraphicsPipeline pipeline;
-    private BoundStorageBuffer shown;
-    private long boundBuffer;
+    /** The bindings of the generation drawn last, one a slot, made as each slot is first drawn. */
+    private final BoundStorageBuffer[] slots = new BoundStorageBuffer[ShownRing.SLOTS];
+    private long generation;
 
     /**
      * @param node   where the picture is shown; sized by layout, and the picture scales into it
@@ -44,17 +47,14 @@ public final class SphereView implements AutoCloseable {
     }
 
     /**
-     * Draws {@code sim} as it stands, each sphere blended {@code alpha} of the way from where the step before the last
-     * left it to where the last one did.
-     *
-     * @param extent the box, {@code sx, sy, sz}, in metres
+     * Draws {@code frame}'s step, each sphere blended {@code alpha} of the way from where the step before it left the
+     * sphere to where it did. Waits for the draw, as {@code renderInto} does, and for nothing else: the step's
+     * timeline has already reached the value the draw waits for.
      */
-    public void show(GuiApp app, SphereSimulation sim, float alpha, double[] extent) {
-        bind(app, sim);
-        // The steps are finished before the draw is submitted: that wait is the dependency between the kernels that
-        // wrote the buffer and the shader that reads it.
-        sim.finish();
-
+    public void show(GuiApp app, ShownRing.Frame frame, float alpha) {
+        BoundStorageBuffer slot = bind(app, frame);
+        ShownRing.Generation g = frame.generation();
+        double[] extent = {g.extent(0), g.extent(1), g.extent(2)};
         double longest = Math.max(extent[0], Math.max(extent[1], extent[2]));
         double scale = longest / 2;                       // metres per orbit unit
         Orbit.Pose pose = orbit.pose();
@@ -65,8 +65,8 @@ public final class SphereView implements AutoCloseable {
         // right looking down +z. The other sign mirrors the picture, and a drag then seems to turn the wrong way.
         double[] right = normalise(forward[2], 0, -forward[0]);
         double[] up = cross(forward, right);
-        byte[] push = SphereShader.push(eye, right, up, forward, 1.0, alpha, sim.spheres(), extent);
-        target.renderInto(pipeline, 0L, shown.descriptorSet(), 3, push, 0f, 0f, 0f, 1f);
+        byte[] push = SphereShader.push(eye, right, up, forward, 1.0, alpha, g.spheres(), extent);
+        target.renderInto(pipeline, 0L, slot.descriptorSet(), 3, push, 0f, 0f, 0f, 1f, g.timeline(), frame.step());
     }
 
     /** Points the node at this view's picture; nothing until the first {@link #show} has made one. */
@@ -76,24 +76,39 @@ public final class SphereView implements AutoCloseable {
         }
     }
 
-    private void bind(GuiApp app, SphereSimulation sim) {
+    /**
+     * The binding of the frame's slot, made the first time it is drawn. A new generation drops the old one's bindings:
+     * its buffers are about to be freed, and a descriptor set may outlive its buffer only if it is never used again.
+     */
+    private BoundStorageBuffer bind(GuiApp app, ShownRing.Frame frame) {
         if (target == null) {
             target = app.viewport(pixels, pixels);
             node.image(target);
         }
-        long buffer = sim.shownBuffer();
-        if (buffer == boundBuffer && pipeline != null) {
-            return;
+        if (frame.generation().id() != generation) {
+            dropSlots();
+            generation = frame.generation().id();
         }
-        if (shown != null) {
-            shown.close();
+        BoundStorageBuffer slot = slots[frame.slot()];
+        if (slot == null) {
+            slot = new BoundStorageBuffer(app.gpu().device(), frame.generation().slot(frame.slot()),
+                    SphereShader.SHOWN_BINDING);
+            slots[frame.slot()] = slot;
         }
-        shown = new BoundStorageBuffer(app.gpu().device(), buffer, SphereShader.SHOWN_BINDING);
-        boundBuffer = buffer;
         if (pipeline == null) {
             pipeline = target.pipelineFor(Fullscreen.triangleVertexWithUvSpirv(), Fullscreen.ENTRY_POINT,
                     SphereShader.fragmentSpirv(), "main", SphereShader.PUSH_BYTES,
-                    new long[] {shown.descriptorSetLayout()});
+                    new long[] {slot.descriptorSetLayout()});
+        }
+        return slot;
+    }
+
+    private void dropSlots() {
+        for (int k = 0; k < slots.length; k++) {
+            if (slots[k] != null) {
+                slots[k].close();
+                slots[k] = null;
+            }
         }
     }
 
@@ -106,16 +121,13 @@ public final class SphereView implements AutoCloseable {
         return new double[] {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
     }
 
-    /** Releases the pipeline and the binding. The target is the application's. */
+    /** Releases the pipeline and the bindings. The target is the application's. */
     @Override
     public void close() {
         if (pipeline != null) {
             pipeline.close();
             pipeline = null;
         }
-        if (shown != null) {
-            shown.close();
-            shown = null;
-        }
+        dropSlots();
     }
 }
