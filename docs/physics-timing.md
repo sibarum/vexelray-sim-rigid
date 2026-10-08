@@ -61,6 +61,13 @@ Surveyed 2026-10-08.
 
 ### 1. SupirVast: queues, signals and timing
 
+**Built** (SupirVast `2c3aed3`, `4f8501b`, `3459a7b`; its `TODO.md` has the details). `Completion` from every run,
+`Accelerator.onDevice(selector)`, devices with queues of several families and buffers shared across them,
+`GpuContext.on(instance, device, family)`, timeline semaphores waited for and signalled by a run, and
+`Completion.gpuNanos()`. Measured on this laptop: both the RTX 5070 Ti and the Intel GPU have a compute-only family,
+and `TwoQueuesTest` orders work across the two queues on each. Ownership transfers were not needed: buffers are
+made with concurrent sharing, and whether that costs anything against exclusive is still to be measured.
+
 - **A compute queue that is not the graphics queue.** Look for a compute-only family (most discrete GPUs have one
   for async compute) and take queues from it, with a lower priority than graphics. Fall back to a second queue of
   the graphics family, then to sharing, so a device without either still works.
