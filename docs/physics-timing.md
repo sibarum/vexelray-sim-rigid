@@ -86,6 +86,26 @@ Tests for each, on both backends where both apply: CPU semantics are trivially s
 
 ### 2. vexelray-gui: the app's device gets a second queue
 
+**Built** (vexelray-gui and vexelray-sim-core). An application asks with `GuiApp.Compute.OWN_QUEUE`, through
+`new GuiApp(config, windows, compute)` or `HarnessApp.start(gui, config, compute)`. On a device with a compute-only
+family, it gets one queue of that family at priority 0.5 beside the queue that draws, and timeline semaphores.
+`GuiApp.Gpu.computeFamily()` and `ownQueue()` say what it got, and `AppCompute.lend` makes its context on that family.
+`Compute.SHARED`, which every existing constructor uses, makes the device it always made. `ComputeQueueTest` (the
+harness) checks both devices and that one with two families still draws. `AppComputeTest` (sim-core-gui) runs a
+kernel on the lent queue of a live application. On this laptop the RTX draws on family 0 and computes on family 2.
+
+Two things are left for later stages:
+
+- **The demo does not ask yet.** With physics on a queue of its own, the next step can write `shown` while the
+  frame before is still reading it. The host wait in `Session` orders the step against the draw that follows, not
+  against the one already on the GPU. Stage 4's ring and timeline wait are what make it safe. The framework has no
+  way to ask either: `VexelApplication` makes its `GuiApp` with `SHARED`, and the request goes through it when the
+  demo needs it.
+- **No fallback to a second queue of the graphics family.** `GpuContext` submits resident work to the first queue
+  of its family and spreads other work over all of them, so on the graphics family it would submit to the queue
+  that draws. The fallback needs `GpuContext` to take one queue of a family, and neither GPU here lacks a
+  compute-only family to test it on. Without one, `OWN_QUEUE` shares, and says so in the log.
+
 - GuiApp asks for a compute queue next to the graphics one when the device has one, and records which it got.
 - `AppCompute.lend` lends physics the compute queue, not the graphics queue.
 - An app that asks for nothing gets exactly today's device. The change is additive, because every VexelRay
