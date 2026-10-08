@@ -30,7 +30,8 @@ invocation per contact, rests the column with under a millionth of Jacobi's movi
 On a pile of 4096 it costs 1.2 ms a step at 10 substeps, about twice what Jacobi costs for the same overlap. The
 demo runs Jacobi on the grid. There is no rotation, so no friction, and no restitution.
 
-Next is making Gauss–Seidel's rounds cheaper, and offering it in the demo. [docs/TODO.md](docs/TODO.md) has the
+Next is the physics timing in [docs/physics-timing.md](docs/physics-timing.md): every contact solved every step, a
+second Vulkan queue, and time that dilates rather than frames that drop. [docs/TODO.md](docs/TODO.md) has the
 numbers and the rest of the list.
 
 ## Running

@@ -161,9 +161,12 @@ solved in the same round.
 
 ## Next
 
-- [ ] **Gauss–Seidel's rounds, cheaper.** A pass is 33 dispatches whatever the list needs, and most of them find
-      little left to do. Count what each round solves first; then weigh fewer rounds, with what is left carried to
-      the next pass, against dispatching only as wide as what is left.
+- [ ] **Physics timing: a fixed step, a variable rate, and time that dilates.** Every step solves every contact,
+      however long that takes. The game slows rather than solve less, and the frame never waits. That needs a
+      second Vulkan queue, a physics worker thread, a ring of finished states, and a clock that counts steps. The
+      plan, in six stages across SupirVast, vexelray-gui, Kronometer and this repo, is
+      [physics-timing.md](physics-timing.md). It replaces capping Gauss–Seidel's rounds: rounds run until the list
+      is done.
 - [ ] **The demo offers the solve**, Jacobi or Gauss–Seidel over the list, so a column can be watched coming to
       rest; and the by-cell solve is deleted.
 - [ ] **Restitution**, as a velocity pass after the position solve, measured on a bounce's height.
