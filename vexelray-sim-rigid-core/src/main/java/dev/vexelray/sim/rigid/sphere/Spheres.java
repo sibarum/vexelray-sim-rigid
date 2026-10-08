@@ -409,6 +409,19 @@ public final class Spheres {
     /** The longest list any substep has made, to set the capacity by. */
     public static final int LONGEST = 2;
 
+    /**
+     * Words of {@code open}: two counts of the contacts a round left open, taken in turn ({@link #contactRound}'s
+     * {@code round} says which), so one is counted into while the other is cleared for the next.
+     */
+    public static final int OPEN_WORDS = 2;
+
+    /** Words of {@code readout}, the few the host reads after every batch of rounds: {@link #report}. */
+    public static final int READOUT_WORDS = 2;
+    /** The contacts the batch's last round left open: zero, and the pass is done. */
+    public static final int READ_OPEN = 0;
+    /** The list's length this substep; past the capacity, contacts that did not fit and are not solved. */
+    public static final int READ_LISTED = 1;
+
     /** The claim arrays a contact list's rounds take in turn: one claimed into, one checked, one cleared. */
     public static final String[] CLAIMS = {"claims0", "claims1", "claims2"};
 
@@ -487,11 +500,14 @@ public final class Spheres {
     }
 
     static final String[] ROUND_NAMES = {"x", "y", "z", "r", "im", "dx", "dy", "dz", "params", "contactA",
-            "contactB", "contactDone", "contactCount", "checked", "claimed", "cleared", "round"};
+            "contactB", "contactDone", "contactCount", "checked", "claimed", "cleared", "round", "open"};
     static final List<Buffer> ROUND_BUFFERS = bind(ROUND_NAMES, 9);
 
-    /** Words of a {@code round}: whether it checks, whether it claims, the pass, and the dispatch in the substep. */
-    public static final int ROUND_WORDS = 4;
+    /**
+     * Words of a {@code round}: whether it checks, whether it claims, the pass, the dispatch its claims are made
+     * with, the {@code open} word it marks, and the dispatch the claims it checks were made with.
+     */
+    public static final int ROUND_WORDS = 6;
 
     /**
      * One invocation per place in the list, {@code capacity} of them: one round of solving the contacts in sets no
@@ -524,9 +540,12 @@ public final class Spheres {
      * sphere no one then wins this round; it cannot make two contacts hold one sphere, which needs two equal
      * priorities in one dispatch.
      *
-     * <p>{@code round} says {@code [checks, claims, pass, dispatch]}. The last dispatch of a pass checks and does
-     * not claim; a contact still not done then is counted in {@link #MISSED}, and waits for the next pass or
-     * substep.
+     * <p>{@code round} says {@code [checks, claims, pass, dispatch, mark, checks dispatch]}. A contact still open
+     * after the check sets {@code open[mark]} to one, and the first invocation clears the other word for the next
+     * round, so a pass is done when a round leaves its word at zero ({@link #report}). The dispatch the check
+     * compares against is given rather than taken as one less, so that a pass of any length can cycle through a
+     * fixed set of rounds. A dispatch that does not claim ends the pass: a contact still not done then is counted
+     * in {@link #MISSED}, and waits for the next pass or substep.
      */
     public static Function contactRound(int spheres, int capacity) {
         List<Buffer> bs = ROUND_BUFFERS;
@@ -540,9 +559,12 @@ public final class Spheres {
         Buffer claimed = bs.get(14);
         Buffer cleared = bs.get(15);
         Buffer round = bs.get(16);
+        Buffer marks = bs.get(17);
 
         Body b = new Body();
         LocalVar c = b.let("c", new Expr.InvocationId());
+        LocalVar mark = b.let("mark", load(round, i(4)));
+        b.when(eq(v(c), i(0)), clearing -> clearing.store(marks, sub(i(1), v(mark)), i(0)));
         LocalVar listed = b.let("listed", load(count, i(LISTED)));
         b.when(gt(v(listed), i(capacity)), over -> over.set(listed, i(capacity)));
         b.when(lt(v(c), v(listed)), t -> {
@@ -555,7 +577,7 @@ public final class Spheres {
                 LocalVar won = open.let("won", i(0));
                 open.when(gt(load(round, i(0)), i(0)), checking -> {
                     // What this contact claimed with in the last dispatch.
-                    LocalVar last = checking.let("last", priority(v(pair), sub(v(dispatch), i(1))));
+                    LocalVar last = checking.let("last", priority(v(pair), load(round, i(5))));
                     checking.when(and(eq(load(checked, v(a)), v(last)), eq(load(checked, v(o)), v(last))),
                             held -> held.set(won, i(1)));
                 });
@@ -568,6 +590,7 @@ public final class Spheres {
                     waiting.store(cleared, v(a), i(0));
                     waiting.store(cleared, v(o), i(0));
                     waiting.when(gt(load(round, i(1)), i(0)), claiming -> {
+                        claiming.store(marks, v(mark), i(1));
                         LocalVar mine = claiming.let("mine", priority(v(pair), v(dispatch)));
                         claiming.atomic(AtomicOp.MAX, claimed, v(a), v(mine));
                         claiming.atomic(AtomicOp.MAX, claimed, v(o), v(mine));
@@ -578,6 +601,32 @@ public final class Spheres {
             });
         });
         return function("spheresContactRound", b);
+    }
+
+    static final String[] REPORT_NAMES = {"open", "contactCount", "round", "readout"};
+    static final List<Buffer> REPORT_BUFFERS = bind(REPORT_NAMES, 0);
+
+    /**
+     * One invocation, after a batch of {@link #contactRound}s: whether the batch's last round left a contact open,
+     * which {@code round} (that round's) says where to read, and the list's length, copied to {@code readout} for
+     * the host to read where it is ({@link #READOUT_WORDS}).
+     *
+     * <p>A pass ends only when this reads zero, and then both words of {@code open} are zero: the last round left its
+     * own so, and cleared the other. So the next pass starts from nothing with no clearing of its own.
+     */
+    public static Function report() {
+        List<Buffer> bs = REPORT_BUFFERS;
+        Buffer marks = bs.get(0);
+        Buffer count = bs.get(1);
+        Buffer round = bs.get(2);
+        Buffer readout = bs.get(3);
+        Body b = new Body();
+        LocalVar c = b.let("c", new Expr.InvocationId());
+        b.when(eq(v(c), i(0)), first -> {
+            first.store(readout, i(READ_OPEN), load(marks, load(round, i(4))));
+            first.store(readout, i(READ_LISTED), load(count, i(LISTED)));
+        });
+        return function("spheresReport", b);
     }
 
     /**

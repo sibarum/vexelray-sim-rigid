@@ -41,5 +41,11 @@
             <groupId>dev.vexelray</groupId>
             <artifactId>vexelray-vulkan</artifactId>
         </dependency>
+        <!-- A real application on a real device, whose lent compute queue a test steps on from a thread of its own. -->
+        <dependency>
+            <groupId>dev.vexelray.gui</groupId>
+            <artifactId>vexelray-gui-harness</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>

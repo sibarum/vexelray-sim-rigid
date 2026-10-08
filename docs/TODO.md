@@ -159,6 +159,39 @@ solved in the same round.
   here, the list on the pile of 343 most.
 - **One substep is still not enough**, for the reason found by cell: 1 × 10 leaves the pile of 4096 coincident.
 
+## Every contact solved, every step — built, measured
+
+`SphereStepper`, and `SphereStep.opening`, `more` and `closing`. Gauss–Seidel over the list no longer runs a fixed
+number of rounds. A pass opens with a batch of rounds and a report. Every round marks a word while any contact is
+still open after its check, and the report copies that word and the list's length into a readout, which the host
+reads where it is (SupirVast's readouts). While anything is open, eight more rounds go, and another report. The
+rounds cycle through 49 recorded positions (0, then 1 to 48 over and over), so a pass can run any number of them.
+The opening batch is sized from what the passes before needed: one wait a pass, nearly always.
+
+**What holds**: `UntilDoneTest`, on both backends, steps a crowded pile of mixed sizes and masses both ways. Run
+until done, it leaves the same state as 47 fixed rounds, to the bit, because its rounds are the same dispatches and
+those after the last contact find nothing to do. `SphereStepperTest` checks, with no backend, the segments, the
+cycle past 48, the batch's growth and slow shrinking, and that a pass that never ends is an error and not a hang.
+The sweep finds the same states as 32 fixed rounds on every scene, and nothing missed, where 24 rounds left 15.8
+contacts a step unsolved on the pile of 4096.
+
+**Measured**, GPU, ms a step, 10 substeps unless said:
+
+| Scene | 32 fixed rounds | Until done | Waits a step | Most rounds a pass |
+| --- | --- | --- | --- | --- |
+| Column of 20 | 0.65 | 1.33 | 10.1 | 16 |
+| Pile of 343 | 0.92 | 1.63 | 10.1 | 24 |
+| Pile of 4096 | 1.23 | 2.07 | 10.1 | 32 |
+| Pile of 4096, 20 substeps | 2.32 | 3.77 | 20.2 | 32 |
+
+- **The cost is the waits**, about 80 µs each on the RTX, one a pass. The empty rounds a generous batch runs are a few
+  µs each and do not show. This is the price of the rule, and it is paid on the physics thread, not the frame's.
+- **A cheaper shape, if it is wanted:** run a whole step with the batch the last needed, wait once, and run the step
+  again with more rounds only when a pass was left open. That needs the state kept from before the step. Not built.
+- **Contacts the list has no room for are still unsolved**, and reported (`unlisted`) rather than fixed: a capacity
+  of six places a sphere has always been enough here. Growing it means new buffers, which a running simulation does
+  not yet do.
+
 ## Next
 
 - [ ] **Physics timing: a fixed step, a variable rate, and time that dilates.** Every step solves every contact,

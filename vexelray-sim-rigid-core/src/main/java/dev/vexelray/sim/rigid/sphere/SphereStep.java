@@ -46,6 +46,15 @@ public final class SphereStep implements Buffered {
      * 4096: 24 left 16 contacts a step unsolved, 32 none, and 48 the same answer as 32 for more time.
      */
     public static final int ROUNDS = 32;
+    /** The rounds a batch adds when a pass run until done ({@link #untilDone}) is still open after its last report. */
+    public static final int BATCH = 8;
+    /**
+     * The positions a pass run until done cycles through after its first round, so that it can run any number of
+     * rounds from a fixed set of them: a multiple of three, for the claim arrays' turns, of two, for the open
+     * words', and of {@link #BATCH}, so batches line up with it. Also the most rounds an opening batch runs.
+     */
+    public static final int CYCLE = 48;
+
     /** The places in the contact list per sphere, unless told otherwise: twelve contacts each, counted once. */
     public static final int CONTACTS_PER_SPHERE = 6;
 
@@ -62,6 +71,18 @@ public final class SphereStep implements Buffered {
     private final Map<String, BufferSpec> buffers = new LinkedHashMap<>();
     private final Map<String, int[]> constants = new LinkedHashMap<>();
     private final List<Pass> step;
+
+    // What the segments of a step run until done ({@link #opening}) are made of; null unless {@link #untilDone}.
+    private final Pass predict;
+    private final Pass velocity;
+    private final Pass walls;
+    private final Pass show;
+    private final List<Pass> prepare = new ArrayList<>();
+    /** Per pass of a substep, the rounds at each of the cycle's positions, and the report after each. */
+    private final List<List<Pass>> cycle = new ArrayList<>();
+    private final List<List<Pass>> reports = new ArrayList<>();
+    /** Segments made so far, by what they are: a runner records each once and keeps it by identity. */
+    private final Map<String, List<Pass>> segments = new java.util.HashMap<>();
 
     /** {@code substeps} substeps of one solve each: XPBD's own recommendation, and the default. Every pair. */
     public SphereStep(int spheres, int substeps) {
@@ -118,14 +139,13 @@ public final class SphereStep implements Buffered {
         buffers.put("params", new BufferSpec("params", Body.F32, Spheres.PARAM_COUNT));
         buffers.put("shown", new BufferSpec("shown", Body.F32, Spheres.SHOWN_STRIDE * spheres));
 
-        Pass predict = new Pass("predict", Spheres.predict(), Spheres.PREDICT_BUFFERS,
+        predict = new Pass("predict", Spheres.predict(), Spheres.PREDICT_BUFFERS,
                 List.of(Spheres.PREDICT_NAMES), spheres);
         Pass apply = new Pass("apply", Spheres.apply(), Spheres.APPLY_BUFFERS, List.of(Spheres.APPLY_NAMES), spheres);
-        Pass velocity = new Pass("velocity", Spheres.velocity(), Spheres.VELOCITY_BUFFERS,
+        velocity = new Pass("velocity", Spheres.velocity(), Spheres.VELOCITY_BUFFERS,
                 List.of(Spheres.VELOCITY_NAMES), spheres);
-        Pass walls = new Pass("walls", Spheres.walls(), Spheres.WALLS_BUFFERS, List.of(Spheres.WALLS_NAMES), spheres);
-        // Before every iteration of a substep, once: the sort, and what is made from it.
-        List<Pass> prepare = new ArrayList<>();
+        walls = new Pass("walls", Spheres.walls(), Spheres.WALLS_BUFFERS, List.of(Spheres.WALLS_NAMES), spheres);
+        // Before every iteration of a substep, once: the sort, and what is made from it: {@link #prepare}.
         // An iteration's passes, which may differ by iteration.
         List<List<Pass>> iteration = new ArrayList<>();
         if (grid == null) {
@@ -180,7 +200,8 @@ public final class SphereStep implements Buffered {
             }
             passes.add(velocity);
         }
-        passes.add(new Pass("show", Spheres.show(), Spheres.SHOW_BUFFERS, List.of(Spheres.SHOW_NAMES), spheres));
+        show = new Pass("show", Spheres.show(), Spheres.SHOW_BUFFERS, List.of(Spheres.SHOW_NAMES), spheres);
+        passes.add(show);
         step = List.copyOf(passes);
     }
 
@@ -201,6 +222,8 @@ public final class SphereStep implements Buffered {
                 List.of(Spheres.CLEAR_NAMES), spheres));
         prepare.add(new Pass("listContacts", Spheres.listContacts(grid, capacity), Spheres.LIST_BUFFERS,
                 List.of(Spheres.LIST_NAMES), spheres));
+        buffers.put("open", new BufferSpec("open", Body.I32, Spheres.OPEN_WORDS));
+        buffers.put("readout", BufferSpec.readout("readout", Body.I32, Spheres.READOUT_WORDS));
         Function round = Spheres.contactRound(spheres, capacity);
         int g = 0;
         for (int it = 0; it < iterations; it++) {
@@ -208,16 +231,126 @@ public final class SphereStep implements Buffered {
             for (int k = 0; k <= rounds; k++, g++) {
                 String kind = "round" + g;
                 buffers.put(kind, new BufferSpec(kind, Body.I32, Spheres.ROUND_WORDS));
-                constants.put(kind, new int[] {k == 0 ? 0 : 1, k == rounds ? 0 : 1, it + 1, g});
-                List<String> names = new ArrayList<>(List.of(Spheres.ROUND_NAMES));
-                names.set(13, Spheres.CLAIMS[(g + 2) % 3]);
-                names.set(14, Spheres.CLAIMS[g % 3]);
-                names.set(15, Spheres.CLAIMS[(g + 1) % 3]);
-                names.set(16, kind);
-                passes.add(new Pass("round " + k, round, Spheres.ROUND_BUFFERS, names, capacity));
+                constants.put(kind, new int[] {k == 0 ? 0 : 1, k == rounds ? 0 : 1, it + 1, g, g % 2, g - 1});
+                passes.add(new Pass("round " + k, round, Spheres.ROUND_BUFFERS, roundNames(g, kind), capacity));
             }
             passes.add(walls);
             iteration.add(passes);
+        }
+        cycle(round);
+    }
+
+    /**
+     * The rounds a pass run until done takes ({@link #opening}): per pass, one at each position of a cycle,
+     * {@code 0} to {@link #CYCLE}, each with a report after it. Position 0 starts the pass and does not check; past
+     * {@link #CYCLE}, a pass goes on at 1. A round at position {@code p} claims into array {@code p mod 3} and marks
+     * word {@code p mod 2}, so the turns run on unbroken around the cycle, because the cycle's length is a multiple
+     * of both; and it claims with dispatch {@code p mod CYCLE}, so the round at 1 checks against the same dispatch
+     * whether it follows position 0 or position {@link #CYCLE}.
+     */
+    private void cycle(Function round) {
+        Pass report = null;
+        for (int it = 0; it < iterations; it++) {
+            List<Pass> rounds = new ArrayList<>();
+            List<Pass> after = new ArrayList<>();
+            for (int p = 0; p <= CYCLE; p++) {
+                String kind = "cycle" + it + "." + p;
+                int dispatch = it * CYCLE + p % CYCLE;
+                int checks = it * CYCLE + Math.max(p - 1, 0) % CYCLE;
+                buffers.put(kind, new BufferSpec(kind, Body.I32, Spheres.ROUND_WORDS));
+                constants.put(kind, new int[] {p == 0 ? 0 : 1, 1, it + 1, dispatch, p % 2, checks});
+                rounds.add(new Pass("round " + p, round, Spheres.ROUND_BUFFERS, roundNames(p, kind), capacity));
+                if (report == null) {
+                    report = new Pass("report", Spheres.report(), Spheres.REPORT_BUFFERS,
+                            List.of(Spheres.REPORT_NAMES), 1);
+                }
+                after.add(new Pass("report", report.kernel(), Spheres.REPORT_BUFFERS,
+                        List.of("open", "contactCount", kind, "readout"), 1));
+            }
+            cycle.add(List.copyOf(rounds));
+            reports.add(List.copyOf(after));
+        }
+    }
+
+    /** A round's buffers, for the {@code g}-th dispatch of a pass, whose constants are {@code kind}. */
+    private static List<String> roundNames(int g, String kind) {
+        List<String> names = new ArrayList<>(List.of(Spheres.ROUND_NAMES));
+        names.set(13, Spheres.CLAIMS[(g + 2) % 3]);
+        names.set(14, Spheres.CLAIMS[g % 3]);
+        names.set(15, Spheres.CLAIMS[(g + 1) % 3]);
+        names.set(16, kind);
+        return names;
+    }
+
+    /**
+     * Whether a step is run until every contact is solved ({@link #opening}, {@link #more} and {@link #closing}),
+     * rather than as the one list {@link #step()}: Gauss–Seidel over a contact list.
+     */
+    public boolean untilDone() {
+        return solve == Solve.GAUSS_SEIDEL_BY_CONTACT;
+    }
+
+    /** Where in the cycle a pass's {@code k}-th round runs: {@code 0} first, then {@code 1} to {@link #CYCLE} over. */
+    public static int position(int k) {
+        return k == 0 ? 0 : 1 + (k - 1) % CYCLE;
+    }
+
+    /**
+     * The segment that opens pass {@code iteration} of substep {@code substep}, ending in its first {@code rounds}
+     * rounds and a report. Before them, what comes between the last segment and this one: for the first pass of a
+     * substep, the substep before it closed (walls, velocity) unless this is the first, then predict and the sort and
+     * the list; for a later pass, the walls of the one before.
+     */
+    public List<Pass> opening(int substep, int iteration, int rounds) {
+        requireUntilDone();
+        String key = "open " + Math.min(substep, 1) + " " + iteration + " " + rounds;
+        return segments.computeIfAbsent(key, k -> {
+            List<Pass> passes = new ArrayList<>();
+            if (iteration > 0) {
+                passes.add(walls);
+            } else {
+                if (substep > 0) {
+                    passes.add(walls);
+                    passes.add(velocity);
+                }
+                passes.add(predict);
+                passes.addAll(prepare);
+            }
+            addRounds(passes, iteration, 0, rounds);
+            return List.copyOf(passes);
+        });
+    }
+
+    /** {@code rounds} more rounds of pass {@code iteration}, from its {@code from}-th, and a report. */
+    public List<Pass> more(int iteration, int from, int rounds) {
+        requireUntilDone();
+        String key = "more " + iteration + " " + position(from) + " " + rounds;
+        return segments.computeIfAbsent(key, k -> {
+            List<Pass> passes = new ArrayList<>();
+            addRounds(passes, iteration, from, rounds);
+            return List.copyOf(passes);
+        });
+    }
+
+    /** What ends a step once its last pass is done: the walls, velocity, and the picture's buffer. */
+    public List<Pass> closing() {
+        requireUntilDone();
+        return segments.computeIfAbsent("close", k -> List.of(walls, velocity, show));
+    }
+
+    private void addRounds(List<Pass> passes, int iteration, int from, int rounds) {
+        if (rounds < 1) {
+            throw new IllegalArgumentException("a batch needs a round, got " + rounds);
+        }
+        for (int k = from; k < from + rounds; k++) {
+            passes.add(cycle.get(iteration).get(position(k)));
+        }
+        passes.add(reports.get(iteration).get(position(from + rounds - 1)));
+    }
+
+    private void requireUntilDone() {
+        if (!untilDone()) {
+            throw new IllegalStateException(solve + " is run as one list, step()");
         }
     }
 

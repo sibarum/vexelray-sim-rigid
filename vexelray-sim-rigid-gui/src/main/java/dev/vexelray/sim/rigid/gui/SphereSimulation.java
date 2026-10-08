@@ -1,37 +1,81 @@
 package dev.vexelray.sim.rigid.gui;
 
+import dev.supirvast.vastir.pass.Pass;
 import dev.supirvast.vastir.tools.Accelerator;
+import dev.supirvast.vastir.tools.Completion;
 import dev.supirvast.vastir.tools.GpuContext;
 import dev.supirvast.vastir.tools.PassRunner;
 import dev.vexelray.sim.rigid.sphere.SphereGrid;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
+import dev.vexelray.sim.rigid.sphere.SphereStepper;
 import dev.vexelray.sim.rigid.sphere.Spheres;
 
+import java.util.ArrayList;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
+
 /**
- * Spheres in a box, stepped on resident buffers: {@link SphereStep} on a {@link PassRunner}, so a step is one
- * recorded submission however many substeps it holds.
+ * Spheres in a box, stepped on resident buffers: {@link SphereStep} on a {@link PassRunner}, run by a
+ * {@link SphereStepper}. Jacobi's step is one recorded submission however many substeps it holds; Gauss–Seidel over
+ * the contact list is run pass by pass until every contact is solved, which waits for the GPU after each batch of
+ * rounds and so belongs on a thread of its own, never the one that draws.
  *
  * <p>Made in two halves, as the accelerator allows: the constructor allocates and registers, which is slow (every
  * kernel lowered, validated and compiled) and may run on any thread; everything after is the owning thread's.
  *
- * <p>On a context lent from the application's device ({@code AppCompute.lend}), the buffers are ones the window can
- * draw from, and {@link #shownBuffer} is what a picture binds. Without one, it runs on a device of its own.
+ * <p>On a context lent from the application's device ({@code AppCompute.lend}, or {@code AppCompute.on} a lent
+ * compute queue), the buffers are ones the window can draw from, and {@link #shownBuffer} is what a picture binds.
+ * Without one, it runs on a device of its own.
  */
 public final class SphereSimulation implements AutoCloseable {
+
+    /**
+     * What a step took.
+     *
+     * @param solve       what running it until done took: waits, rounds, and contacts that did not fit the list
+     * @param submissions how many submissions it was, after {@linkplain #slice slicing}
+     * @param wallNanos   from the first submission to knowing the step was done, for {@link #stepAndWait}; else from
+     *                    the first submission to the last
+     * @param gpuNanos    the step's time on the GPU, every submission whose time could be read, added up; zero where
+     *                    the device writes no timestamps
+     */
+    public record StepReport(SphereStepper.Report solve, int submissions, long wallNanos, long gpuNanos) {
+    }
 
     private final Accelerator accelerator;
     private final SphereStep step;
     private final PassRunner runner;
+    private final SphereStepper stepper;
+    /** Lists cut to the slice, by the identity of the list they were cut from. */
+    private final Map<List<Pass>, List<List<Pass>>> sliced = new IdentityHashMap<>();
+    private int slice;
+
+    // What the step in progress has taken, for its report.
+    private int submissions;
+    private long gpuNanos;
+    private final List<Completion> unread = new ArrayList<>();
 
     /**
+     * Jacobi over {@code grid}, or every pair without one: what the demo has run from the start.
+     *
      * @param context the application's device, or null for one of the simulation's own
      * @param grid    the broad phase's grid, or null to test every pair
      */
     public SphereSimulation(GpuContext context, int spheres, int substeps, int iterations, SphereGrid grid) {
+        this(context, new SphereStep(spheres, substeps, iterations, grid));
+    }
+
+    /** {@code step}, whatever it solves with, on {@code context}, or on a device of its own if that is null. */
+    public SphereSimulation(GpuContext context, SphereStep step) {
         this.accelerator = context == null ? new Accelerator() : Accelerator.on(context);
-        this.step = new SphereStep(spheres, substeps, iterations, grid);
+        this.step = step;
         this.runner = PassRunner.gpu(accelerator, step, Spheres.WORKGROUP, PassRunner.NO_SUBGROUP);
+        this.stepper = new SphereStepper(step);
         runner.prepare(step.step());
+        if (step.untilDone()) {
+            runner.prepare(step.opening(0, 0, SphereStep.BATCH));
+        }
     }
 
     public int spheres() {
@@ -46,9 +90,28 @@ public final class SphereSimulation implements AutoCloseable {
         return step.iterations;
     }
 
+    public SphereStep.Solve solve() {
+        return step.solve;
+    }
+
     /** Whether the state is on a GPU, as a picture of it needs. */
     public boolean onDevice() {
         return runner.onDevice();
+    }
+
+    /**
+     * At most {@code dispatches} dispatches in any one submission, so that on a GPU shared with drawing no single
+     * submission holds it for long; zero for no bound. A list longer than that is submitted in pieces, in order, with
+     * no wait between them. What size keeps a frame's time flat is a measurement, not a guess.
+     */
+    public void slice(int dispatches) {
+        if (dispatches < 0) {
+            throw new IllegalArgumentException("a slice is some dispatches, or zero for no bound; got " + dispatches);
+        }
+        if (dispatches != slice) {
+            slice = dispatches;
+            sliced.clear();
+        }
     }
 
     /**
@@ -84,9 +147,67 @@ public final class SphereSimulation implements AutoCloseable {
         runner.write("params", params);
     }
 
-    /** One step: every substep, and the picture's buffer updated. Returns without waiting. */
-    public void step() {
-        runner.run(step.step());
+    /**
+     * One step: every substep, every contact solved, and the picture's buffer updated. Jacobi's returns without
+     * waiting; Gauss–Seidel over the list waits after each batch of rounds, and returns once its last pass is known
+     * to be done, with the closing passes still running.
+     */
+    public StepReport step() {
+        return run(false);
+    }
+
+    /** {@link #step}, and waits for all of it: what a thread that runs steps back to back on its own queue does. */
+    public StepReport stepAndWait() {
+        return run(true);
+    }
+
+    private StepReport run(boolean wait) {
+        long start = System.nanoTime();
+        submissions = 0;
+        gpuNanos = 0;
+        SphereStepper.Report solve = stepper.step(new SphereStepper.Runner() {
+            @Override
+            public void run(List<Pass> passes) {
+                submit(passes);
+            }
+
+            @Override
+            public int[] runAndRead(List<Pass> passes) {
+                submit(passes).await();
+                return runner.peek("readout");
+            }
+        });
+        if (wait) {
+            runner.finish();
+        }
+        long wall = System.nanoTime() - start;
+        unread.removeIf(c -> {
+            if (!c.done()) {
+                return false;
+            }
+            gpuNanos += c.gpuNanos().orElse(0);
+            return true;
+        });
+        return new StepReport(solve, submissions, wall, gpuNanos);
+    }
+
+    /** Submits {@code passes}, a slice at a time; returns the last submission's completion. */
+    private Completion submit(List<Pass> passes) {
+        List<List<Pass>> pieces = slice == 0 || passes.size() <= slice ? List.of(passes)
+                : sliced.computeIfAbsent(passes, list -> {
+                    List<List<Pass>> out = new ArrayList<>();
+                    for (int k = 0; k < list.size(); k += slice) {
+                        out.add(List.copyOf(list.subList(k, Math.min(list.size(), k + slice))));
+                    }
+                    return List.copyOf(out);
+                });
+        Completion last = null;
+        for (List<Pass> piece : pieces) {
+            last = runner.run(piece);
+            unread.add(last);
+            submissions++;
+        }
+        return last;
     }
 
     /** Waits for every step run so far: what orders the steps before a draw that reads their buffers. */

@@ -42,12 +42,24 @@ final class Scene implements AutoCloseable {
     boolean grid;
     /** How a pass solves; both Gauss–Seidels search the grid whatever {@link #grid} says. */
     SphereStep.Solve solve = SphereStep.Solve.JACOBI;
-    /** Rounds a pass, for Gauss–Seidel over the contact list. */
+    /** Rounds a pass, for Gauss–Seidel over the contact list when {@link #fixedRounds}. */
     int rounds = SphereStep.ROUNDS;
+    /**
+     * Whether Gauss–Seidel over the contact list runs {@link #rounds} rounds a pass, as it was first measured, rather
+     * than until every contact is solved.
+     */
+    boolean fixedRounds;
+
+    /** What the steps run until done have taken, added up: see {@link SphereStepper.Report}. */
+    long waits;
+    long roundsRun;
+    int mostRounds;
+    long unlisted;
 
     private Accelerator accelerator;
     private PassRunner runner;
     private SphereStep step;
+    private SphereStepper stepper;
 
     Scene(int n) {
         this.n = n;
@@ -82,6 +94,7 @@ final class Scene implements AutoCloseable {
         boolean gridded = grid || solve != SphereStep.Solve.JACOBI;
         step = new SphereStep(n, substeps, iterations, gridded ? SphereGrid.covering(sx, sy, sz, widest()) : null,
                 solve, rounds, SphereStep.CONTACTS_PER_SPHERE);
+        stepper = new SphereStepper(step);
         if (backend == Backend.CPU) {
             runner = PassRunner.cpu(step, Spheres.WORKGROUP, PassRunner.NO_SUBGROUP);
         } else {
@@ -110,8 +123,28 @@ final class Scene implements AutoCloseable {
 
     /** {@code frames} steps of {@link #dt}. */
     Scene advance(int frames) {
+        SphereStepper.Runner run = new SphereStepper.Runner() {
+            @Override
+            public void run(java.util.List<dev.supirvast.vastir.pass.Pass> passes) {
+                runner.run(passes);
+            }
+
+            @Override
+            public int[] runAndRead(java.util.List<dev.supirvast.vastir.pass.Pass> passes) {
+                runner.run(passes).await();
+                return runner.peek("readout");
+            }
+        };
         for (int k = 0; k < frames; k++) {
-            runner.run(step.step());
+            if (fixedRounds || !step.untilDone()) {
+                runner.run(step.step());
+                continue;
+            }
+            SphereStepper.Report report = stepper.step(run);
+            waits += report.waits();
+            roundsRun += report.rounds();
+            mostRounds = Math.max(mostRounds, report.mostRounds());
+            unlisted += report.unlisted();
         }
         return this;
     }

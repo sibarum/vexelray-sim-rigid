@@ -33,6 +33,12 @@ class SphereSweepTest {
             return new Solver("list R=" + rounds + (iterations > 1 ? " " + iterations + " it" : ""), 1, false,
                     substeps, iterations, true, SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT, rounds);
         }
+
+        /** Gauss–Seidel over the contact list, ω = 1, every pass run until every contact is solved. */
+        static Solver untilDone(int substeps, int iterations) {
+            return new Solver("list until done" + (iterations > 1 ? " " + iterations + " it" : ""), 1, false,
+                    substeps, iterations, true, SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT, 0);
+        }
     }
 
     private static final Solver[] SOLVERS = {
@@ -55,6 +61,9 @@ class SphereSweepTest {
             Solver.list(48, 10, 1),
             Solver.list(24, 20, 1),
             Solver.list(24, 1, 10),
+            Solver.untilDone(10, 1),
+            Solver.untilDone(20, 1),
+            Solver.untilDone(1, 10),
     };
 
     /** The large pile is slow every pair, so only the settings worth comparing. */
@@ -73,6 +82,9 @@ class SphereSweepTest {
             Solver.list(48, 10, 1),
             Solver.list(24, 20, 1),
             Solver.list(24, 1, 10),
+            Solver.untilDone(10, 1),
+            Solver.untilDone(20, 1),
+            Solver.untilDone(1, 10),
     };
 
     /** Twenty spheres in a column a sphere wide, touching, under gravity for three seconds. */
@@ -138,7 +150,8 @@ class SphereSweepTest {
         scene.iterations = solver.iterations();
         scene.grid = solver.grid();
         scene.solve = solver.solve();
-        scene.rounds = solver.rounds();
+        scene.fixedRounds = solver.rounds() > 0;
+        scene.rounds = solver.rounds() > 0 ? solver.rounds() : SphereStep.ROUNDS;
         return scene;
     }
 
@@ -158,6 +171,11 @@ class SphereSweepTest {
         int[] contacts = scene.contactCount();
         String list = contacts == null ? "" : String.format("  missed %.1f a step, longest list %d",
                 contacts[Spheres.MISSED] / (double) frames, contacts[Spheres.LONGEST]);
+        if (contacts != null && !scene.fixedRounds) {
+            list = String.format("  %.1f waits and %.0f rounds a step, at most %d in a pass, %d unlisted, "
+                            + "longest list %d", scene.waits / (double) frames, scene.roundsRun / (double) frames,
+                    scene.mostRounds, scene.unlisted, contacts[Spheres.LONGEST]);
+        }
         System.out.println(String.format("%-22s %4d %3d  %-10.2e %-10.2e %-10.2e %-10.2e %-9.3f  %s%s%s",
                 solver.name(), solver.substeps(), solver.iterations(), state.maxOverlap(), state.maxWall(),
                 state.kinetic(), state.maxSpeed(), ms, extra.apply(scene), list, state.broken() ? "  BROKEN" : ""));

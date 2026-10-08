@@ -113,6 +113,34 @@ Two things are left for later stages:
 
 ### 3. A physics worker on its own thread
 
+**Built, except the component itself** (SupirVast, vexelray-gui, vexelray-framework, vexelray-sim-core and this
+repo).
+
+- **The queue is lent, and T3.1 now says so.**
+  - `GuiApp.lendComputeQueue()` hands out a `ComputeQueue` once. A wiring that says `computeQueue()` gets a device
+    made with one, and the processor generates that answer exactly when a `@Component` takes a `ComputeQueue`.
+    `Shell.computeQueue()` lends it.
+  - Two components taking it, or any provider, is a compile error. `AppCompute.on(queue)` makes the context.
+  - vexelray-framework's `threading.md` keeps the window, present and the queue that draws on the main thread,
+    and gives this queue to the one component's lane.
+- **Every contact, every step.** `SphereStepper` runs Gauss–Seidel over the list until nothing is open: see
+  [TODO.md](TODO.md), *Every contact solved, every step*. It waits once a pass, about 80 µs on the RTX, so a step of
+  the pile of 4096 costs 2.07 ms where 32 fixed rounds cost 1.23. The answer is the same to the bit.
+- **Sliced.** `SphereSimulation.slice(n)` submits at most `n` dispatches at a time, and `stepAndWait()` reports a
+  step's submissions, wall time and GPU time. `PhysicsThreadTest` steps a pile of 1000 back to back on a platform
+  thread, on the queue a live application lent, while the application's loop goes on drawing. A step costs 2.5 ms
+  on the wall and 0.8 ms on the GPU, about ten waits. Sliced at 12 dispatches, it is 29 submissions a step and the
+  same state, to the bit.
+
+Not yet:
+
+- **The demo's `@Component`.** It waits for stage 4, because the frame reads `shown` and the worker writes it, so
+  nothing is safe to run there until the ring and the timeline wait exist. It also moves the demo to generated
+  wiring, which places components.
+- **The slice size, measured against frame time.** That needs a frame worth measuring, which is the demo in stage 4.
+- **"Never decides when a step is due."** The allowance a clock gives the worker is stage 5's. Until then a worker
+  runs what it is told to.
+
 - A framework component with its own platform thread (`vexel-component-physics`), owning the physics queue. Under
   T3.1 the main thread still owns the window and present; it no longer owns the physics queue.
 - **Every step solves every contact.** After the contact list is made, rounds run in batches; between batches the

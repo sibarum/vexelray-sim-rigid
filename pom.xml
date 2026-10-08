@@ -105,6 +105,11 @@
                 <artifactId>vexelray-gui-core</artifactId>
                 <version>${vexelray.gui.version}</version>
             </dependency>
+            <dependency>
+                <groupId>dev.vexelray.gui</groupId>
+                <artifactId>vexelray-gui-harness</artifactId>
+                <version>${vexelray.gui.version}</version>
+            </dependency>
 
             <dependency>
                 <groupId>org.junit</groupId>
