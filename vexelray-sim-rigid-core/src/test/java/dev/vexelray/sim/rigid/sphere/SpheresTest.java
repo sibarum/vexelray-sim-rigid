@@ -2,13 +2,16 @@ package dev.vexelray.sim.rigid.sphere;
 
 import dev.vexelray.sim.rigid.sphere.Scene.Backend;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** The cases with an answer known in advance: a fall, a landing, and a collision. Each backend is judged on its own. */
+/**
+ * The cases with an answer known in advance: a fall, a landing, and a collision, under each solve. Each backend is
+ * judged on its own.
+ */
 class SpheresTest {
 
     /**
@@ -16,12 +19,13 @@ class SpheresTest {
      * {@code h}, {@code v = −g h k} and {@code y = y₀ − g h² k(k + 1) / 2}.
      */
     @ParameterizedTest
-    @EnumSource(Backend.class)
-    void aFallingSphereFollowsSymplecticEulerExactly(Backend backend) {
+    @CsvSource({"CPU, JACOBI", "CPU, GAUSS_SEIDEL", "GPU, JACOBI", "GPU, GAUSS_SEIDEL"})
+    void aFallingSphereFollowsSymplecticEulerExactly(Backend backend, SphereStep.Solve solve) {
         try (Scene scene = new Scene(1).uniform(0.1, 1)) {
             scene.sx = scene.sy = scene.sz = 10;
             scene.x[0] = scene.z[0] = 5;
             scene.y[0] = 8;
+            scene.solve = solve;
             scene.start(backend).advance(30);
             scene.read();
 
@@ -35,11 +39,12 @@ class SpheresTest {
 
     /** A dropped sphere lands, does not bounce (contact is inelastic), and rests on the floor rather than in it. */
     @ParameterizedTest
-    @EnumSource(Backend.class)
-    void aDroppedSphereComesToRestOnTheFloor(Backend backend) {
+    @CsvSource({"CPU, JACOBI", "CPU, GAUSS_SEIDEL", "GPU, JACOBI", "GPU, GAUSS_SEIDEL"})
+    void aDroppedSphereComesToRestOnTheFloor(Backend backend, SphereStep.Solve solve) {
         try (Scene scene = new Scene(1).uniform(0.1, 1)) {
             scene.x[0] = scene.z[0] = 0.5f;
             scene.y[0] = 0.8f;
+            scene.solve = solve;
             scene.start(backend).advanceSeconds(1);
             SphereDiagnostics state = scene.diagnostics();
 
@@ -54,8 +59,8 @@ class SpheresTest {
      * of 2 kg·m/s is kept, and the two leave together at 0.5 m/s, touching and not passing through each other.
      */
     @ParameterizedTest
-    @EnumSource(Backend.class)
-    void aCollisionKeepsMomentumAndTheSpheresLeaveTogether(Backend backend) {
+    @CsvSource({"CPU, JACOBI", "CPU, GAUSS_SEIDEL", "GPU, JACOBI", "GPU, GAUSS_SEIDEL"})
+    void aCollisionKeepsMomentumAndTheSpheresLeaveTogether(Backend backend, SphereStep.Solve solve) {
         try (Scene scene = new Scene(2).uniform(0.1, 1)) {
             scene.gy = 0;
             scene.sx = 4;
@@ -64,6 +69,7 @@ class SpheresTest {
             scene.x[1] = 2;
             scene.u[0] = 2;
             scene.im[1] = 1 / 3f;
+            scene.solve = solve;
             scene.start(backend).advanceSeconds(1);
             SphereDiagnostics state = scene.diagnostics();
 

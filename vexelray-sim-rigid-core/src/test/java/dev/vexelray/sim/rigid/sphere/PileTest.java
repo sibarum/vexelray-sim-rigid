@@ -19,19 +19,21 @@ class PileTest {
 
     /**
      * A hundred and twenty-five spheres dropped as a loose lattice into a box, for three seconds, with every pair
-     * tested and with the grid. Nothing goes non-finite, nothing leaves the box, no sphere passes into another by
-     * more than a fifth of a radius, and the pile ends with less energy than it started with: contact only ever
-     * takes energy away.
+     * tested, with the grid, and by Gauss–Seidel. Nothing goes non-finite, nothing leaves the box, no sphere passes
+     * into another by more than a fifth of a radius, and the pile ends with less energy than it started with:
+     * contact only ever takes energy away.
      */
     @ParameterizedTest
-    @CsvSource({"CPU, false", "CPU, true", "GPU, false", "GPU, true"})
-    void aDroppedPileStaysInsideApartAndLosesEnergy(Backend backend, boolean grid) {
+    @CsvSource({"CPU, false, JACOBI", "CPU, true, JACOBI", "CPU, true, GAUSS_SEIDEL", "GPU, false, JACOBI",
+            "GPU, true, JACOBI", "GPU, true, GAUSS_SEIDEL"})
+    void aDroppedPileStaysInsideApartAndLosesEnergy(Backend backend, boolean grid, SphereStep.Solve solve) {
         int side = 5;
         try (Scene scene = new Scene(side * side * side).uniform(0.03, 0.1)) {
             scene.sx = scene.sz = 0.4;
             scene.sy = 1;
             scene.substeps = 20;
             scene.grid = grid;
+            scene.solve = solve;
             Random random = new Random(11);
             int k = 0;
             for (int i = 0; i < side; i++) {

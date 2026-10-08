@@ -17,7 +17,11 @@ class SphereSweepTest {
 
     private static final Backend BACKEND = Backend.valueOf(System.getProperty("rigid.backend", "GPU"));
 
-    private record Solver(String name, double omega, boolean averaged, int substeps, int iterations, boolean grid) {
+    private record Solver(String name, double omega, boolean averaged, int substeps, int iterations, boolean grid,
+                          SphereStep.Solve solve) {
+        Solver(String name, double omega, boolean averaged, int substeps, int iterations, boolean grid) {
+            this(name, omega, averaged, substeps, iterations, grid, SphereStep.Solve.JACOBI);
+        }
     }
 
     private static final Solver[] SOLVERS = {
@@ -30,14 +34,22 @@ class SphereSweepTest {
             new Solver("averaged omega=1 10 it", 1, true, 1, 10, false),
             new Solver("grid averaged omega=1", 1, true, 10, 1, true),
             new Solver("grid averaged omega=1", 1, true, 20, 1, true),
+            new Solver("GS omega=1", 1, false, 5, 1, true, SphereStep.Solve.GAUSS_SEIDEL),
+            new Solver("GS omega=1", 1, false, 10, 1, true, SphereStep.Solve.GAUSS_SEIDEL),
+            new Solver("GS omega=1", 1, false, 20, 1, true, SphereStep.Solve.GAUSS_SEIDEL),
+            new Solver("GS omega=1 10 it", 1, false, 1, 10, true, SphereStep.Solve.GAUSS_SEIDEL),
     };
 
-    /** The large pile is slow every pair, so only the two settings worth comparing. */
+    /** The large pile is slow every pair, so only the settings worth comparing. */
     private static final Solver[] LARGE = {
             new Solver("averaged omega=1", 1, true, 10, 1, false),
             new Solver("averaged omega=1", 1, true, 20, 1, false),
             new Solver("grid averaged omega=1", 1, true, 10, 1, true),
             new Solver("grid averaged omega=1", 1, true, 20, 1, true),
+            new Solver("GS omega=1", 1, false, 5, 1, true, SphereStep.Solve.GAUSS_SEIDEL),
+            new Solver("GS omega=1", 1, false, 10, 1, true, SphereStep.Solve.GAUSS_SEIDEL),
+            new Solver("GS omega=1", 1, false, 20, 1, true, SphereStep.Solve.GAUSS_SEIDEL),
+            new Solver("GS omega=1 10 it", 1, false, 1, 10, true, SphereStep.Solve.GAUSS_SEIDEL),
     };
 
     /** Twenty spheres in a column a sphere wide, touching, under gravity for three seconds. */
@@ -102,6 +114,7 @@ class SphereSweepTest {
         scene.substeps = solver.substeps();
         scene.iterations = solver.iterations();
         scene.grid = solver.grid();
+        scene.solve = solver.solve();
         return scene;
     }
 

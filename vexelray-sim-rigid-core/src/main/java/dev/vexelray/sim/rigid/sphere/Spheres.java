@@ -27,6 +27,7 @@ import static dev.supirvast.vastir.build.Body.max;
 import static dev.supirvast.vastir.build.Body.min;
 import static dev.supirvast.vastir.build.Body.mod;
 import static dev.supirvast.vastir.build.Body.mul;
+import static dev.supirvast.vastir.build.Body.neg;
 import static dev.supirvast.vastir.build.Body.not;
 import static dev.supirvast.vastir.build.Body.sqrt;
 import static dev.supirvast.vastir.build.Body.sub;
@@ -90,6 +91,12 @@ import static dev.supirvast.vastir.build.Body.v;
  * reference. {@link #solve(SphereGrid)} tests only the spheres in the 27 cells around a sphere's own, after
  * {@link #bin} and SupirVast's counting sort have listed the spheres by cell. The two find the same contacts, and
  * differ only in the order each sphere sums them, so they agree to rounding.
+ *
+ * <h2>Gauss–Seidel</h2>
+ *
+ * {@link #solveContacts} replaces solve and apply with a pass that solves contact after contact, each against the
+ * positions the last one left, in 27 colours over the grid's cells, and then {@link #walls}. A stack hears its own
+ * weight within one pass, which Jacobi cannot; it is measured in {@code docs/TODO.md}, with what it costs.
  *
  * <h2>What it is not, yet</h2>
  *
@@ -193,17 +200,18 @@ public final class Spheres {
      * sees the same state. Every other sphere is tested: {@code n²} tests a pass.
      */
     public static Function solve() {
+        List<Buffer> bs = SOLVE_BUFFERS;
         Body b = new Body();
         LocalVar s = b.let("s", new Expr.InvocationId());
         LocalVar count = b.let("count", new Expr.InvocationCount());
         b.when(lt(v(s), v(count)), t -> {
-            Solving solving = Solving.begin(t, s, SOLVE_BUFFERS);
+            Solving solving = Solving.begin(t, s, bs);
             LocalVar o = t.let("o", i(0));
             t.loop(lt(v(o), v(count)), pass -> {
                 solving.against(pass, o);
                 pass.set(o, add(v(o), i(1)));
             });
-            solving.finish(t);
+            store(t, s, solving.move(t), bs.get(5), bs.get(6), bs.get(7));
         });
         return function("spheresSolve", b);
     }
@@ -221,11 +229,8 @@ public final class Spheres {
     public static Function solve(SphereGrid grid) {
         List<Buffer> bs = GRID_SOLVE_BUFFERS;
         Buffer keys = bs.get(9);
-        Buffer starts = bs.get(10);
-        Buffer order = bs.get(11);
         int nx = grid.nx();
         int ny = grid.ny();
-        int nz = grid.nz();
 
         Body b = new Body();
         LocalVar s = b.let("s", new Expr.InvocationId());
@@ -235,40 +240,199 @@ public final class Spheres {
             LocalVar ix = t.let("ix", mod(v(key), i(nx)));
             LocalVar iy = t.let("iy", mod(div(v(key), i(nx)), i(ny)));
             LocalVar iz = t.let("iz", div(v(key), i(nx * ny)));
-            LocalVar n = t.let("n", i(0));
-            t.loop(lt(v(n), i(27)), around -> {
-                LocalVar jx = around.let("jx", add(v(ix), sub(mod(v(n), i(3)), i(1))));
-                LocalVar jy = around.let("jy", add(v(iy), sub(mod(div(v(n), i(3)), i(3)), i(1))));
-                LocalVar jz = around.let("jz", add(v(iz), sub(div(v(n), i(9)), i(1))));
-                around.when(and(within(jx, nx), and(within(jy, ny), within(jz, nz))), inside -> {
-                    LocalVar cell = inside.let("cell", add(v(jx), mul(i(nx), add(v(jy), mul(i(ny), v(jz))))));
-                    LocalVar k = inside.let("k", load(starts, v(cell)));
-                    LocalVar end = inside.let("end", load(starts, add(v(cell), i(1))));
-                    inside.loop(lt(v(k), v(end)), run -> {
-                        LocalVar o = run.let("o", load(order, v(k)));
-                        solving.against(run, o);
-                        run.set(k, add(v(k), i(1)));
-                    });
-                });
-                around.set(n, add(v(n), i(1)));
-            });
-            solving.finish(t);
+            around(t, grid, ix, iy, iz, bs.get(10), bs.get(11), solving);
+            store(t, s, solving.move(t), bs.get(5), bs.get(6), bs.get(7));
         });
         return function("spheresGridSolve", b);
+    }
+
+    static final String[] CONTACT_NAMES = {"x", "y", "z", "r", "im", "dx", "dy", "dz", "params", "starts", "order"};
+    static final List<Buffer> CONTACT_BUFFERS = bind(CONTACT_NAMES, 9);
+
+    /** How many colours {@link #solveContacts} takes: each of a cell's indices, modulo three. */
+    public static final int COLOURS = 27;
+
+    /**
+     * Gauss–Seidel by contact: one pass of the 27 solves the contacts owned by the cells of one colour, a colour
+     * being each of a cell's indices modulo three, and moves both spheres of each contact at once, by their shares
+     * of its overlap by inverse mass.
+     *
+     * <p>A cell owns the contacts between its own spheres, and those between its spheres and the spheres of the 13
+     * cells around it that come after it — so every contact has one owner. A cell writes only its own spheres and
+     * those of its neighbours, and two cells of a colour are three cells apart, so what one reads and writes the
+     * other never touches: each colour is parallel and needs no atomics. A correction made by one colour is what the
+     * next colour sees, within the same pass; which is what Jacobi lacks, and why a stack hears its own weight late
+     * under it.
+     *
+     * <p>One invocation per cell of the colour, {@link #cellsOf} of them, which works through its contacts one after
+     * another, each against the positions as the ones before it left them. Both spheres of a contact move together,
+     * so the contact's moves are equal and opposite by mass, and are added up as computed as the Jacobi moves are.
+     * Moving one sphere a turn instead, each taking its share of the overlap it saw, was measured and is wrong: the
+     * second of a pair sees an overlap the first has shrunk, and a collision of 1 kg into 3 kg gained a quarter of
+     * its momentum.
+     *
+     * <p>Every contact takes {@code ω} of its correction; the {@link #AVERAGED} parameter means nothing here, since
+     * no contact is solved twice from one state. The walls are not here: {@link #walls} follows the colours.
+     */
+    public static Function solveContacts(SphereGrid grid, int colour) {
+        List<Buffer> bs = CONTACT_BUFFERS;
+        Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
+        Buffer radius = bs.get(3);
+        Buffer im = bs.get(4);
+        Buffer[] displaced = {bs.get(5), bs.get(6), bs.get(7)};
+        Buffer params = bs.get(8);
+        Buffer starts = bs.get(9);
+        Buffer order = bs.get(10);
+        int nx = grid.nx();
+        int ny = grid.ny();
+        int nz = grid.nz();
+        int[] rest = {colour % 3, colour / 3 % 3, colour / 9};
+        int hx = third(nx, rest[0]);
+        int hy = third(ny, rest[1]);
+
+        Body b = new Body();
+        LocalVar id = b.let("id", new Expr.InvocationId());
+        b.when(lt(v(id), new Expr.InvocationCount()), t -> {
+            LocalVar ix = t.let("ix", add(mul(mod(v(id), i(hx)), i(3)), i(rest[0])));
+            LocalVar iy = t.let("iy", add(mul(mod(div(v(id), i(hx)), i(hy)), i(3)), i(rest[1])));
+            LocalVar iz = t.let("iz", add(mul(div(v(id), i(hx * hy)), i(3)), i(rest[2])));
+            LocalVar own = t.let("own", add(v(ix), mul(i(nx), add(v(iy), mul(i(ny), v(iz))))));
+            LocalVar omega = t.let("omega", load(params, i(OMEGA)));
+            LocalVar ka = t.let("ka", load(starts, v(own)));
+            LocalVar endA = t.let("endA", load(starts, add(v(own), i(1))));
+            t.loop(lt(v(ka), v(endA)), first -> {
+                LocalVar a = first.let("a", load(order, v(ka)));
+                // The own cell is the middle of the 27, and the 13 after it are the cells it owns contacts with.
+                LocalVar n = first.let("n", i(13));
+                first.loop(lt(v(n), i(27)), next -> {
+                    LocalVar jx = next.let("jx", add(v(ix), sub(mod(v(n), i(3)), i(1))));
+                    LocalVar jy = next.let("jy", add(v(iy), sub(mod(div(v(n), i(3)), i(3)), i(1))));
+                    LocalVar jz = next.let("jz", add(v(iz), sub(div(v(n), i(9)), i(1))));
+                    next.when(and(within(jx, nx), and(within(jy, ny), within(jz, nz))), inside -> {
+                        LocalVar cell = inside.let("cell", add(v(jx), mul(i(nx), add(v(jy), mul(i(ny), v(jz))))));
+                        LocalVar kb = inside.let("kb", load(starts, v(cell)));
+                        // Within the own cell, each pair once: only the spheres after this one.
+                        inside.when(eq(v(n), i(13)), same -> same.set(kb, add(v(ka), i(1))));
+                        LocalVar endB = inside.let("endB", load(starts, add(v(cell), i(1))));
+                        inside.loop(lt(v(kb), v(endB)), second -> {
+                            LocalVar o = second.let("o", load(order, v(kb)));
+                            contact(second, a, o, at, radius, im, displaced, omega);
+                            second.set(kb, add(v(kb), i(1)));
+                        });
+                    });
+                    next.set(n, add(v(n), i(1)));
+                });
+                first.set(ka, add(v(ka), i(1)));
+            });
+        });
+        return function("spheresSolveContacts" + colour, b);
+    }
+
+    /**
+     * Spheres {@code a} and {@code o} parted, if they overlap: each moved along the line between them by its share
+     * of {@code ω} times the overlap, by inverse mass, and each move added to what the constraints have moved it.
+     */
+    private static void contact(Body b, LocalVar a, LocalVar o, Buffer[] at, Buffer radius, Buffer im,
+                                Buffer[] displaced, LocalVar omega) {
+        LocalVar[] d = new LocalVar[3];
+        for (int axis = 0; axis < 3; axis++) {
+            d[axis] = b.let("d", sub(load(at[axis], v(a)), load(at[axis], v(o))));
+        }
+        LocalVar d2 = b.let("d2", add(mul(v(d[0]), v(d[0])), add(mul(v(d[1]), v(d[1])), mul(v(d[2]), v(d[2])))));
+        LocalVar reach = b.let("reach", add(load(radius, v(a)), load(radius, v(o))));
+        LocalVar wa = b.let("wa", load(im, v(a)));
+        LocalVar wo = b.let("wo", load(im, v(o)));
+        LocalVar wsum = b.let("wsum", add(v(wa), v(wo)));
+        b.when(lt(v(d2), mul(v(reach), v(reach))), near ->
+                near.when(gt(v(d2), f(COINCIDENT)), apart ->
+                        apart.when(gt(v(wsum), f(0)), touching -> {
+                            LocalVar dist = touching.let("dist", sqrt(v(d2)));
+                            // The relaxed overlap per unit of the separation vector and of inverse mass.
+                            LocalVar k = touching.let("k", div(mul(v(omega), sub(v(reach), v(dist))),
+                                    mul(v(dist), v(wsum))));
+                            for (int axis = 0; axis < 3; axis++) {
+                                LocalVar step = touching.let("step", mul(v(k), v(d[axis])));
+                                LocalVar ma = touching.let("ma", mul(v(step), v(wa)));
+                                LocalVar mo = touching.let("mo", neg(mul(v(step), v(wo))));
+                                touching.store(at[axis], v(a), add(load(at[axis], v(a)), v(ma)));
+                                touching.store(at[axis], v(o), add(load(at[axis], v(o)), v(mo)));
+                                touching.store(displaced[axis], v(a), add(load(displaced[axis], v(a)), v(ma)));
+                                touching.store(displaced[axis], v(o), add(load(displaced[axis], v(o)), v(mo)));
+                            }
+                        })));
+    }
+
+    /** The cells of {@code grid} that {@link #solveContacts} visits for {@code colour}: zero where it has none. */
+    public static int cellsOf(SphereGrid grid, int colour) {
+        return third(grid.nx(), colour % 3) * third(grid.ny(), colour / 3 % 3) * third(grid.nz(), colour / 9);
+    }
+
+    /** How many of the indices {@code [0, n)} are {@code rest} modulo three. */
+    private static int third(int n, int rest) {
+        return Math.max(0, (n - rest + 2) / 3);
+    }
+
+    static final String[] WALLS_NAMES = {"x", "y", "z", "r", "im", "dx", "dy", "dz", "params"};
+    static final List<Buffer> WALLS_BUFFERS = bind(WALLS_NAMES);
+
+    /**
+     * One invocation per sphere, after {@link #solveContacts}' colours: the sphere projected back inside the walls,
+     * as {@link #apply} does after the Jacobi move, and the push added to what the constraints have moved it.
+     */
+    public static Function walls() {
+        List<Buffer> bs = WALLS_BUFFERS;
+        Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
+        Buffer[] displaced = {bs.get(5), bs.get(6), bs.get(7)};
+        Body b = new Body();
+        LocalVar s = b.let("s", new Expr.InvocationId());
+        b.when(lt(v(s), new Expr.InvocationCount()), t -> t.when(gt(load(bs.get(4), v(s)), f(0)), free ->
+                shift(free, s, new Expr[] {f(0), f(0), f(0)}, at, bs.get(3), displaced, bs.get(8))));
+        return function("spheresWalls", b);
+    }
+
+    /** Offers {@code solving} every sphere in cell {@code (ix, iy, iz)} and the 26 around it. */
+    private static void around(Body t, SphereGrid grid, LocalVar ix, LocalVar iy, LocalVar iz, Buffer starts,
+                               Buffer order, Solving solving) {
+        int nx = grid.nx();
+        int ny = grid.ny();
+        int nz = grid.nz();
+        LocalVar n = t.let("n", i(0));
+        t.loop(lt(v(n), i(27)), next -> {
+            LocalVar jx = next.let("jx", add(v(ix), sub(mod(v(n), i(3)), i(1))));
+            LocalVar jy = next.let("jy", add(v(iy), sub(mod(div(v(n), i(3)), i(3)), i(1))));
+            LocalVar jz = next.let("jz", add(v(iz), sub(div(v(n), i(9)), i(1))));
+            next.when(and(within(jx, nx), and(within(jy, ny), within(jz, nz))), inside -> {
+                LocalVar cell = inside.let("cell", add(v(jx), mul(i(nx), add(v(jy), mul(i(ny), v(jz))))));
+                LocalVar k = inside.let("k", load(starts, v(cell)));
+                LocalVar end = inside.let("end", load(starts, add(v(cell), i(1))));
+                inside.loop(lt(v(k), v(end)), run -> {
+                    LocalVar o = run.let("o", load(order, v(k)));
+                    solving.against(run, o);
+                    run.set(k, add(v(k), i(1)));
+                });
+            });
+            next.set(n, add(v(n), i(1)));
+        });
     }
 
     private static Expr within(LocalVar index, int bound) {
         return and(not(lt(v(index), i(0))), lt(v(index), i(bound)));
     }
 
+    private static void store(Body t, LocalVar s, LocalVar[] move, Buffer... into) {
+        for (int a = 0; a < 3; a++) {
+            t.store(into[a], v(s), v(move[a]));
+        }
+    }
+
     /**
-     * One sphere's solve as it goes: what it knows of itself, and the move summed so far. Both searches use it, so
-     * they differ only in which spheres they offer it.
+     * One sphere's solve as it goes: what it knows of itself, and the move summed so far. Both Jacobi solves use
+     * it, so they differ only in which spheres they offer it.
      */
     private record Solving(LocalVar s, LocalVar[] mine, LocalVar rs, LocalVar ws, LocalVar[] sum, LocalVar contacts,
-                           Buffer[] at, Buffer radius, Buffer im, Buffer[] correction, Buffer params) {
+                           Buffer[] at, Buffer radius, Buffer im, Buffer params) {
 
-        /** The first nine bindings are the same in both solves: {@link #SOLVE_NAMES}. */
+        /** {@code x, y, z, r, im} are both solves' first five bindings, and {@code params} its ninth. */
         static Solving begin(Body t, LocalVar s, List<Buffer> bs) {
             Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
             LocalVar[] mine = {t.let("xs", load(at[0], v(s))), t.let("ys", load(at[1], v(s))),
@@ -277,8 +441,7 @@ public final class Spheres {
             LocalVar ws = t.let("ws", load(bs.get(4), v(s)));
             LocalVar[] sum = {t.let("sx", f(0)), t.let("sy", f(0)), t.let("sz", f(0))};
             LocalVar contacts = t.let("contacts", f(0));
-            return new Solving(s, mine, rs, ws, sum, contacts, at, bs.get(3), bs.get(4),
-                    new Buffer[] {bs.get(5), bs.get(6), bs.get(7)}, bs.get(8));
+            return new Solving(s, mine, rs, ws, sum, contacts, at, bs.get(3), bs.get(4), bs.get(8));
         }
 
         /** Sphere {@code o}'s overlap with this one, if any, and this one's share of the move that parts them. */
@@ -307,15 +470,17 @@ public final class Spheres {
             });
         }
 
-        /** The summed move, relaxed as the parameters say, stored as this sphere's correction. */
-        void finish(Body t) {
+        /** The summed move, relaxed as the parameters say. */
+        LocalVar[] move(Body t) {
             LocalVar omega = t.let("omega", load(params, i(OMEGA)));
             LocalVar averaged = t.let("averaged", load(params, i(AVERAGED)));
             LocalVar scale = t.let("scale", v(omega));
             t.when(gt(v(averaged), f(0)), avg -> avg.set(scale, div(v(omega), max(v(contacts), f(1)))));
+            LocalVar[] move = new LocalVar[3];
             for (int a = 0; a < 3; a++) {
-                t.store(correction[a], v(s), mul(v(scale), v(sum[a])));
+                move[a] = t.let("move", mul(v(scale), v(sum[a])));
             }
+            return move;
         }
     }
 
@@ -353,23 +518,33 @@ public final class Spheres {
         Buffer[] correction = {bs.get(5), bs.get(6), bs.get(7)};
         Buffer[] displaced = {bs.get(8), bs.get(9), bs.get(10)};
         Buffer params = bs.get(11);
-        int[] extent = {SX, SY, SZ};
 
         Body b = new Body();
         LocalVar s = b.let("s", new Expr.InvocationId());
         b.when(lt(v(s), new Expr.InvocationCount()), t -> t.when(gt(load(im, v(s)), f(0)), free -> {
-            LocalVar r = free.let("r", load(radius, v(s)));
-            for (int a = 0; a < 3; a++) {
-                LocalVar c = free.let("c", load(correction[a], v(s)));
-                LocalVar moved = free.let("moved", add(load(at[a], v(s)), v(c)));
-                LocalVar high = free.let("high", sub(load(params, i(extent[a])), v(r)));
-                LocalVar inside = free.let("inside", max(v(r), min(v(high), v(moved))));
-                free.store(at[a], v(s), v(inside));
-                // The move as computed, not as the rounded position has it; the wall's push only where it pushed.
-                free.store(displaced[a], v(s), add(load(displaced[a], v(s)), add(v(c), sub(v(inside), v(moved)))));
-            }
+            Expr[] move = {load(correction[0], v(s)), load(correction[1], v(s)), load(correction[2], v(s))};
+            shift(free, s, move, at, radius, displaced, params);
         }));
         return function("spheresApply", b);
+    }
+
+    /**
+     * Sphere {@code s} moved by {@code move}, then projected back inside the walls; and the move, as computed, added
+     * to what the constraints have moved it this substep, with the wall's push only where it pushed.
+     */
+    private static void shift(Body free, LocalVar s, Expr[] move, Buffer[] at, Buffer radius, Buffer[] displaced,
+                              Buffer params) {
+        int[] extent = {SX, SY, SZ};
+        LocalVar r = free.let("r", load(radius, v(s)));
+        for (int a = 0; a < 3; a++) {
+            LocalVar c = free.let("c", move[a]);
+            LocalVar moved = free.let("moved", add(load(at[a], v(s)), v(c)));
+            LocalVar high = free.let("high", sub(load(params, i(extent[a])), v(r)));
+            LocalVar inside = free.let("inside", max(v(r), min(v(high), v(moved))));
+            free.store(at[a], v(s), v(inside));
+            // The move as computed, not as the rounded position has it; the wall's push only where it pushed.
+            free.store(displaced[a], v(s), add(load(displaced[a], v(s)), add(v(c), sub(v(inside), v(moved)))));
+        }
     }
 
     /** One invocation per sphere: what the constraints moved it by this substep, added as a velocity, and cleared. */

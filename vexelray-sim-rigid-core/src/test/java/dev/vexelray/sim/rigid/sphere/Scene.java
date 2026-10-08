@@ -40,6 +40,8 @@ final class Scene implements AutoCloseable {
     boolean averaged = true;
     /** Whether the solve searches a grid, its cells as wide as the widest sphere, or tests every pair. */
     boolean grid;
+    /** How a pass solves; Gauss–Seidel searches the grid whatever {@link #grid} says. */
+    SphereStep.Solve solve = SphereStep.Solve.JACOBI;
 
     private Accelerator accelerator;
     private PassRunner runner;
@@ -75,7 +77,9 @@ final class Scene implements AutoCloseable {
     }
 
     Scene start(Backend backend) {
-        step = new SphereStep(n, substeps, iterations, grid ? SphereGrid.covering(sx, sy, sz, widest()) : null);
+        boolean gridded = grid || solve == SphereStep.Solve.GAUSS_SEIDEL;
+        step = new SphereStep(n, substeps, iterations, gridded ? SphereGrid.covering(sx, sy, sz, widest()) : null,
+                solve);
         if (backend == Backend.CPU) {
             runner = PassRunner.cpu(step, Spheres.WORKGROUP, PassRunner.NO_SUBGROUP);
         } else {

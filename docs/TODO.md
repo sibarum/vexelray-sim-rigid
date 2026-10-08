@@ -72,12 +72,52 @@ the test fails by 0.39 m. `PileTest` runs with and without the grid.
 - **The broad phase does not settle anything.** The pile of 4096 still has 10% overlap and moving energy after
   4 s at 20 substeps, either way. That is the solver's, and Gauss–Seidel's to answer.
 
+## Gauss–Seidel by contact — built, measured: it settles, and is too slow for a pile
+
+`Spheres.solveContacts`, chosen by `SphereStep.Solve.GAUSS_SEIDEL`. The grid's cells are coloured by each index
+modulo three, 27 colours. A cell owns the contacts among its own spheres and with the 13 neighbouring cells after
+it, and solves them one after another, moving both spheres of each by their shares. Two cells of a colour are three
+apart, so nothing one reads or writes is the other's: no atomics. A pass is the 27 colours, then a walls pass.
+
+**What holds**: everything `SpheresTest` and `PileTest` hold for Jacobi, momentum in the collision to 1e-6
+included, on both backends.
+
+**A finding on the way: move both spheres of a contact, not one sphere a turn.** The first version coloured cells
+by parity, 8 colours, and moved only the sphere whose turn it was, by its share of the overlap it saw. The second of
+a pair then sees an overlap the first has already shrunk, and the collision of 1 kg into 3 kg gained 26% of its
+momentum. Letting the second take all that was left fixed the pair (1.7e-5, f32 rounding) and broke the piles: a
+sphere with several contacts took the whole of each, and the pile of 4096 gained energy, to 385 J. Both are the
+same fault, a contact's two moves made from two states; moving both at once removes it.
+
+**Measured**, GPU, 60 Hz, ω = 1, against Jacobi averaged ω = 1 on the grid:
+
+| Scene | Substeps | Jacobi: overlap / KE / ms | Gauss–Seidel: overlap / KE / ms |
+| --- | --- | --- | --- |
+| Column of 20 | 10 | 3.6% / 4.1e-2 J / 0.17 | 2.1% / 8.0e-9 J / 0.20 |
+| Column of 20 | 20 | 1.0% / 5.7e-4 J / 0.29 | 0.52% / 2.2e-8 J / 0.36 |
+| Pile of 343 | 10 | 12% / 3.0e-3 J / 0.25 | 1.5% / 5.3e-5 J / 7.8 |
+| Pile of 343 | 20 | 1.9% / 1.4e-3 J / 0.46 | 1.0% / 4.3e-5 J / 15 |
+| Pile of 4096 | 10 | 42% / 0.18 J / 0.33 | 7.0% / 0.13 J / 6.6 |
+| Pile of 4096 | 20 | 12% / 0.14 J / 0.62 | 1.8% / 2.9e-2 J / 13 |
+
+- **A column rests.** At 10 substeps its moving energy is 8e-9 J, five million times less than Jacobi's, for the
+  same cost: the column has cells in only 3 of the 27 colours. Iterations work again too: 1 × 10 leaves 1.5e-5 J,
+  where Jacobi's left 0.58 J.
+- **A pile settles, and costs 20–33× as much.** Overlap falls six-fold at 4096 spheres, but a pass is 27
+  dispatches of one invocation per cell, each working through a few dozen contacts in turn: about 25 µs a
+  dispatch, with most of the GPU idle. That is the whole cost, and the next thing to take on.
+- **One substep is not enough to sort by.** 1 × 10 on the pile of 4096 leaves spheres coincident and 2.5e3 J of
+  moving energy, and Jacobi's 1 × 10 left the pile of 343 at 85%: a dropped sphere crosses a cell in a substep, so
+  the cells it was sorted into are stale before the pass ends. Substeps are not only accuracy here; they keep the
+  broad phase honest.
+
 ## Next
 
-- [ ] **Gauss–Seidel by colour.** Colour the contacts so that no two of a colour share a sphere, then solve one colour
-      per pass, so a correction reaches the next sphere within the same pass. The direct answer to "Jacobi hears the
-      stack late", and still parallel. The grid gives it each sphere's contacts to colour. Measured against the
-      Jacobi table above.
+- [ ] **Gauss–Seidel at the GPU's width.** The solve is right and the parallelism is wrong: one serial invocation
+      per cell, 27 times a pass. A contact list built after the sort, one entry per touching pair, and coloured
+      per contact so that no two of a colour share a sphere, would solve a colour with one invocation per contact:
+      as many colours as a sphere has contacts (12 at most for equal spheres), each wide. Measured against the
+      table above, on cost first.
 - [ ] **Restitution**, as a velocity pass after the position solve, measured on a bounce's height.
 - [ ] **Rotation and friction**: an orientation per body, and friction at contacts, so a pile holds a slope and a
       sphere rolls.
