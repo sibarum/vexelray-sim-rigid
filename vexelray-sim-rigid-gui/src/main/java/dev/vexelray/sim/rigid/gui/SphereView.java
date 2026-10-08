@@ -61,8 +61,10 @@ public final class SphereView implements AutoCloseable {
         double[] eye = {extent[0] / 2 + pose.x() * scale, extent[1] / 2 + pose.y() * scale,
                 extent[2] / 2 + pose.z() * scale};
         double[] forward = normalise(-pose.x(), -pose.y(), -pose.z());
-        double[] right = normalise(-forward[2], 0, forward[0]);
-        double[] up = cross(right, forward);
+        // SdfComposer's camera, which Orbit's angles are written for: right is (cos yaw, 0, −sin yaw), so +x is to the
+        // right looking down +z. The other sign mirrors the picture, and a drag then seems to turn the wrong way.
+        double[] right = normalise(forward[2], 0, -forward[0]);
+        double[] up = cross(forward, right);
         byte[] push = SphereShader.push(eye, right, up, forward, 1.0, alpha, sim.spheres(), extent);
         target.renderInto(pipeline, 0L, shown.descriptorSet(), 3, push, 0f, 0f, 0f, 1f);
     }
