@@ -40,8 +40,10 @@ final class Scene implements AutoCloseable {
     boolean averaged = true;
     /** Whether the solve searches a grid, its cells as wide as the widest sphere, or tests every pair. */
     boolean grid;
-    /** How a pass solves; Gauss–Seidel searches the grid whatever {@link #grid} says. */
+    /** How a pass solves; both Gauss–Seidels search the grid whatever {@link #grid} says. */
     SphereStep.Solve solve = SphereStep.Solve.JACOBI;
+    /** Rounds a pass, for Gauss–Seidel over the contact list. */
+    int rounds = SphereStep.ROUNDS;
 
     private Accelerator accelerator;
     private PassRunner runner;
@@ -77,9 +79,9 @@ final class Scene implements AutoCloseable {
     }
 
     Scene start(Backend backend) {
-        boolean gridded = grid || solve == SphereStep.Solve.GAUSS_SEIDEL;
+        boolean gridded = grid || solve != SphereStep.Solve.JACOBI;
         step = new SphereStep(n, substeps, iterations, gridded ? SphereGrid.covering(sx, sy, sz, widest()) : null,
-                solve);
+                solve, rounds, SphereStep.CONTACTS_PER_SPHERE);
         if (backend == Backend.CPU) {
             runner = PassRunner.cpu(step, Spheres.WORKGROUP, PassRunner.NO_SUBGROUP);
         } else {
@@ -93,6 +95,7 @@ final class Scene implements AutoCloseable {
             runner = PassRunner.gpu(accelerator, step, Spheres.WORKGROUP, PassRunner.NO_SUBGROUP);
             runner.clear();
         }
+        step.constants().forEach(runner::write);
         runner.write("params", Spheres.params(dt / substeps, gx, gy, gz, sx, sy, sz, omega, averaged));
         runner.write("x", x);
         runner.write("y", y);
@@ -128,6 +131,11 @@ final class Scene implements AutoCloseable {
         return this;
     }
 
+
+    /** The contact list's counts ({@link Spheres#CONTACT_COUNT_WORDS}), or null where the solve keeps no list. */
+    int[] contactCount() {
+        return step.buffers().containsKey("contactCount") ? runner.read("contactCount") : null;
+    }
     SphereDiagnostics diagnostics() {
         read();
         return SphereDiagnostics.of(x, y, z, u, v, w, r, im, gy, sx, sy, sz);

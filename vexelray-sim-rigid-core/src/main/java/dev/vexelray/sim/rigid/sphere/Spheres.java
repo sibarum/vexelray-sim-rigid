@@ -1,6 +1,8 @@
 package dev.vexelray.sim.rigid.sphere;
 
 import dev.supirvast.vastir.build.Body;
+import dev.supirvast.vastir.core.AtomicOp;
+import dev.supirvast.vastir.core.BinaryOp;
 import dev.supirvast.vastir.core.Buffer;
 import dev.supirvast.vastir.core.Expr;
 import dev.supirvast.vastir.core.Function;
@@ -10,6 +12,7 @@ import dev.supirvast.vastir.type.Type;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 import static dev.supirvast.vastir.build.Body.F32;
 import static dev.supirvast.vastir.build.Body.I32;
@@ -94,9 +97,18 @@ import static dev.supirvast.vastir.build.Body.v;
  *
  * <h2>Gauss–Seidel</h2>
  *
- * {@link #solveContacts} replaces solve and apply with a pass that solves contact after contact, each against the
- * positions the last one left, in 27 colours over the grid's cells, and then {@link #walls}. A stack hears its own
- * weight within one pass, which Jacobi cannot; it is measured in {@code docs/TODO.md}, with what it costs.
+ * Two passes that solve contact after contact, each against the positions the ones before it left, moving both
+ * spheres of a contact at once; then {@link #walls}. A stack hears its own weight within one pass, which Jacobi
+ * cannot.
+ *
+ * <ul>
+ *   <li>{@link #contactRound}: over a list of contacts made each substep ({@link #listContacts}), in rounds that
+ *       each solve a set of contacts sharing no sphere, one invocation a contact. The one to use.</li>
+ *   <li>{@link #solveContacts}: in 27 colours of the grid's cells, one serial invocation a cell. As right, and
+ *       five times the cost; kept as a measured record.</li>
+ * </ul>
+ *
+ * Both are measured in {@code docs/TODO.md}, with what they cost.
  *
  * <h2>What it is not, yet</h2>
  *
@@ -372,6 +384,215 @@ public final class Spheres {
         return Math.max(0, (n - rest + 2) / 3);
     }
 
+    // --- Gauss–Seidel over a contact list ------------------------------------------------------------------
+
+    /**
+     * The most spheres a contact list can order: a contact's priority is its pair {@code a · n + o} scrambled, and
+     * that must fit in 31 bits.
+     */
+    public static final int MOST_LISTED_SPHERES = 46_340;
+
+    /**
+     * How near two spheres are listed as a contact, past touching, as a share of the sum of their radii. A pair
+     * that only comes to touch as the substep's passes move the spheres is otherwise missed until the next
+     * substep, and the overlap it has gathered by then is taken in one move, which the velocity feels. 2% was
+     * measured to be enough for a column at rest; more only lengthens the list.
+     */
+    public static final float LIST_MARGIN = 0.02f;
+
+    /** Words of {@code contactCount}: the list's length this substep, and two readings for the sweep. */
+    public static final int CONTACT_COUNT_WORDS = 3;
+    /** The contacts listed this substep; past the capacity, the ones that did not fit. */
+    public static final int LISTED = 0;
+    /** Contacts left unsolved when a pass's rounds ran out, added up since the start. */
+    public static final int MISSED = 1;
+    /** The longest list any substep has made, to set the capacity by. */
+    public static final int LONGEST = 2;
+
+    /** The claim arrays a contact list's rounds take in turn: one claimed into, one checked, one cleared. */
+    public static final String[] CLAIMS = {"claims0", "claims1", "claims2"};
+
+    static final String[] CLEAR_NAMES = {CLAIMS[0], CLAIMS[1], CLAIMS[2], "contactCount"};
+    static final List<Buffer> CLEAR_BUFFERS = bind(CLEAR_NAMES, 0);
+
+    /**
+     * One invocation per sphere, before the list is made: every claim cleared, and the list emptied, its length
+     * kept in {@link #LONGEST} if it is the longest yet.
+     */
+    public static Function clearContacts() {
+        List<Buffer> bs = CLEAR_BUFFERS;
+        Buffer count = bs.get(3);
+        Body b = new Body();
+        LocalVar s = b.let("s", new Expr.InvocationId());
+        b.when(lt(v(s), new Expr.InvocationCount()), t -> {
+            for (int k = 0; k < CLAIMS.length; k++) {
+                t.store(bs.get(k), v(s), i(0));
+            }
+            t.when(eq(v(s), i(0)), first -> {
+                first.atomic(AtomicOp.MAX, count, i(LONGEST), load(count, i(LISTED)));
+                first.store(count, i(LISTED), i(0));
+            });
+        });
+        return function("spheresClearContacts", b);
+    }
+
+    static final String[] LIST_NAMES = {"x", "y", "z", "r", "keys", "starts", "order", "contactA", "contactB",
+            "contactDone", "contactCount"};
+    static final List<Buffer> LIST_BUFFERS = bind(LIST_NAMES, 4);
+
+    /**
+     * One invocation per sphere, after the sort: every sphere within {@link #LIST_MARGIN} of touching it, with a
+     * higher index, so each pair once, appended to the list by an atomic count. A pair that would not fit in
+     * {@code capacity} is counted and left out. Which contacts a substep solves is fixed here, from the positions as
+     * predicted.
+     */
+    public static Function listContacts(SphereGrid grid, int capacity) {
+        List<Buffer> bs = LIST_BUFFERS;
+        Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
+        Buffer radius = bs.get(3);
+        Buffer keys = bs.get(4);
+        Buffer count = bs.get(10);
+        int nx = grid.nx();
+        int ny = grid.ny();
+
+        Body b = new Body();
+        LocalVar a = b.let("a", new Expr.InvocationId());
+        b.when(lt(v(a), new Expr.InvocationCount()), t -> {
+            LocalVar key = t.let("key", load(keys, v(a)));
+            LocalVar ix = t.let("ix", mod(v(key), i(nx)));
+            LocalVar iy = t.let("iy", mod(div(v(key), i(nx)), i(ny)));
+            LocalVar iz = t.let("iz", div(v(key), i(nx * ny)));
+            LocalVar[] mine = {t.let("xa", load(at[0], v(a))), t.let("ya", load(at[1], v(a))),
+                    t.let("za", load(at[2], v(a)))};
+            LocalVar ra = t.let("ra", load(radius, v(a)));
+            around(t, grid, ix, iy, iz, bs.get(5), bs.get(6), (run, o) -> run.when(gt(v(o), v(a)), later -> {
+                LocalVar[] d = new LocalVar[3];
+                for (int axis = 0; axis < 3; axis++) {
+                    d[axis] = later.let("d", sub(v(mine[axis]), load(at[axis], v(o))));
+                }
+                LocalVar d2 = later.let("d2", add(mul(v(d[0]), v(d[0])),
+                        add(mul(v(d[1]), v(d[1])), mul(v(d[2]), v(d[2])))));
+                LocalVar near = later.let("near", mul(add(v(ra), load(radius, v(o))), f(1 + LIST_MARGIN)));
+                later.when(lt(v(d2), mul(v(near), v(near))), listed -> {
+                    LocalVar slot = listed.fetchAtomic("slot", AtomicOp.ADD, count, i(LISTED), i(1));
+                    listed.when(lt(v(slot), i(capacity)), fits -> {
+                        fits.store(bs.get(7), v(slot), v(a));
+                        fits.store(bs.get(8), v(slot), v(o));
+                        fits.store(bs.get(9), v(slot), i(0));
+                    });
+                });
+            }));
+        });
+        return function("spheresListContacts", b);
+    }
+
+    static final String[] ROUND_NAMES = {"x", "y", "z", "r", "im", "dx", "dy", "dz", "params", "contactA",
+            "contactB", "contactDone", "contactCount", "checked", "claimed", "cleared", "round"};
+    static final List<Buffer> ROUND_BUFFERS = bind(ROUND_NAMES, 9);
+
+    /** Words of a {@code round}: whether it checks, whether it claims, the pass, and the dispatch in the substep. */
+    public static final int ROUND_WORDS = 4;
+
+    /**
+     * One invocation per place in the list, {@code capacity} of them: one round of solving the contacts in sets no
+     * two of which share a sphere, which is what lets a set be solved in parallel, each contact moving both its
+     * spheres as {@link #solveContacts} does.
+     *
+     * <p>A round has two halves, and a dispatch is the second half of one round and the first of the next:
+     *
+     * <ol>
+     *   <li><b>Check</b>: a contact that holds both its spheres' claims for the last round solves, and is done for
+     *       the pass.</li>
+     *   <li><b>Claim</b>: every contact not done claims both its spheres, by an atomic max of its priority; the
+     *       highest claim holds a sphere, and a contact holding both solves at the next check.</li>
+     * </ol>
+     *
+     * Three claim arrays take turns: a dispatch checks the one the last round claimed into, claims into the next,
+     * and clears the third for the round after — each contact clearing its own two spheres, which are the only ones
+     * it will claim. So no round's claims meet another's, and a priority needs no room for which round it is.
+     *
+     * <p>A contact's priority comes from its pair, {@code a · n + o}, and the dispatch ({@link #priority}): one to
+     * one within a dispatch, so no two contacts tie; shuffled between dispatches, so a chain of contacts each
+     * outranking the next is not solved one a round; and the same in every substep. That last was measured, and
+     * matters more than anything else here. Priorities from the contact's place in the list, which the atomic
+     * append makes different every substep, left a settled pile of 343 at 3.5e-2 J of moving energy, against 5e-9
+     * J from the pair: each substep solved the same contacts in another order, found a slightly different answer,
+     * and the velocity felt the difference. Priorities from the pair alone, never shuffled, settle as well but
+     * need twice the rounds.
+     *
+     * <p>A claim left over from an earlier dispatch, in an array no contact has cleared since, can at worst hold a
+     * sphere no one then wins this round; it cannot make two contacts hold one sphere, which needs two equal
+     * priorities in one dispatch.
+     *
+     * <p>{@code round} says {@code [checks, claims, pass, dispatch]}. The last dispatch of a pass checks and does
+     * not claim; a contact still not done then is counted in {@link #MISSED}, and waits for the next pass or
+     * substep.
+     */
+    public static Function contactRound(int spheres, int capacity) {
+        List<Buffer> bs = ROUND_BUFFERS;
+        Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
+        Buffer[] displaced = {bs.get(5), bs.get(6), bs.get(7)};
+        Buffer first = bs.get(9);
+        Buffer second = bs.get(10);
+        Buffer done = bs.get(11);
+        Buffer count = bs.get(12);
+        Buffer checked = bs.get(13);
+        Buffer claimed = bs.get(14);
+        Buffer cleared = bs.get(15);
+        Buffer round = bs.get(16);
+
+        Body b = new Body();
+        LocalVar c = b.let("c", new Expr.InvocationId());
+        LocalVar listed = b.let("listed", load(count, i(LISTED)));
+        b.when(gt(v(listed), i(capacity)), over -> over.set(listed, i(capacity)));
+        b.when(lt(v(c), v(listed)), t -> {
+            LocalVar pass = t.let("pass", load(round, i(2)));
+            t.when(not(eq(load(done, v(c)), v(pass))), open -> {
+                LocalVar a = open.let("a", load(first, v(c)));
+                LocalVar o = open.let("o", load(second, v(c)));
+                LocalVar pair = open.let("pair", add(mul(v(a), i(spheres)), v(o)));
+                LocalVar dispatch = open.let("dispatch", load(round, i(3)));
+                LocalVar won = open.let("won", i(0));
+                open.when(gt(load(round, i(0)), i(0)), checking -> {
+                    // What this contact claimed with in the last dispatch.
+                    LocalVar last = checking.let("last", priority(v(pair), sub(v(dispatch), i(1))));
+                    checking.when(and(eq(load(checked, v(a)), v(last)), eq(load(checked, v(o)), v(last))),
+                            held -> held.set(won, i(1)));
+                });
+                open.when(gt(v(won), i(0)), solving -> {
+                    contact(solving, a, o, at, bs.get(3), bs.get(4), displaced,
+                            solving.let("omega", load(bs.get(8), i(OMEGA))));
+                    solving.store(done, v(c), v(pass));
+                });
+                open.when(eq(v(won), i(0)), waiting -> {
+                    waiting.store(cleared, v(a), i(0));
+                    waiting.store(cleared, v(o), i(0));
+                    waiting.when(gt(load(round, i(1)), i(0)), claiming -> {
+                        LocalVar mine = claiming.let("mine", priority(v(pair), v(dispatch)));
+                        claiming.atomic(AtomicOp.MAX, claimed, v(a), v(mine));
+                        claiming.atomic(AtomicOp.MAX, claimed, v(o), v(mine));
+                    });
+                    waiting.when(eq(load(round, i(1)), i(0)),
+                            out -> out.atomic(AtomicOp.ADD, count, i(MISSED), i(1)));
+                });
+            });
+        });
+        return function("spheresContactRound", b);
+    }
+
+    /**
+     * A contact's priority in dispatch {@code g} of a substep: its pair times an odd number, offset by the dispatch,
+     * kept to 31 bits. One to one for any one dispatch, so no two contacts tie; the same in every substep; and
+     * shuffled from one dispatch to the next.
+     */
+    private static Expr priority(Expr pair, Expr g) {
+        return bitAnd(add(mul(pair, i(0x9E3779B1)), mul(g, i(0x632BE5AB))), i(Integer.MAX_VALUE));
+    }
+
+    private static Expr bitAnd(Expr a, Expr b) {
+        return new Expr.Binary(BinaryOp.BIT_AND, a, b);
+    }
+
     static final String[] WALLS_NAMES = {"x", "y", "z", "r", "im", "dx", "dy", "dz", "params"};
     static final List<Buffer> WALLS_BUFFERS = bind(WALLS_NAMES);
 
@@ -393,6 +614,12 @@ public final class Spheres {
     /** Offers {@code solving} every sphere in cell {@code (ix, iy, iz)} and the 26 around it. */
     private static void around(Body t, SphereGrid grid, LocalVar ix, LocalVar iy, LocalVar iz, Buffer starts,
                                Buffer order, Solving solving) {
+        around(t, grid, ix, iy, iz, starts, order, solving::against);
+    }
+
+    /** Offers {@code visit} every sphere in cell {@code (ix, iy, iz)} and the 26 around it. */
+    private static void around(Body t, SphereGrid grid, LocalVar ix, LocalVar iy, LocalVar iz, Buffer starts,
+                               Buffer order, BiConsumer<Body, LocalVar> visit) {
         int nx = grid.nx();
         int ny = grid.ny();
         int nz = grid.nz();
@@ -407,7 +634,7 @@ public final class Spheres {
                 LocalVar end = inside.let("end", load(starts, add(v(cell), i(1))));
                 inside.loop(lt(v(k), v(end)), run -> {
                     LocalVar o = run.let("o", load(order, v(k)));
-                    solving.against(run, o);
+                    visit.accept(run, o);
                     run.set(k, add(v(k), i(1)));
                 });
             });

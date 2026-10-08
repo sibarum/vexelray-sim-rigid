@@ -18,9 +18,20 @@ class SphereSweepTest {
     private static final Backend BACKEND = Backend.valueOf(System.getProperty("rigid.backend", "GPU"));
 
     private record Solver(String name, double omega, boolean averaged, int substeps, int iterations, boolean grid,
-                          SphereStep.Solve solve) {
+                          SphereStep.Solve solve, int rounds) {
         Solver(String name, double omega, boolean averaged, int substeps, int iterations, boolean grid) {
             this(name, omega, averaged, substeps, iterations, grid, SphereStep.Solve.JACOBI);
+        }
+
+        Solver(String name, double omega, boolean averaged, int substeps, int iterations, boolean grid,
+               SphereStep.Solve solve) {
+            this(name, omega, averaged, substeps, iterations, grid, solve, SphereStep.ROUNDS);
+        }
+
+        /** Gauss–Seidel over the contact list, ω = 1, with this many rounds a pass. */
+        static Solver list(int rounds, int substeps, int iterations) {
+            return new Solver("list R=" + rounds + (iterations > 1 ? " " + iterations + " it" : ""), 1, false,
+                    substeps, iterations, true, SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT, rounds);
         }
     }
 
@@ -34,10 +45,16 @@ class SphereSweepTest {
             new Solver("averaged omega=1 10 it", 1, true, 1, 10, false),
             new Solver("grid averaged omega=1", 1, true, 10, 1, true),
             new Solver("grid averaged omega=1", 1, true, 20, 1, true),
-            new Solver("GS omega=1", 1, false, 5, 1, true, SphereStep.Solve.GAUSS_SEIDEL),
-            new Solver("GS omega=1", 1, false, 10, 1, true, SphereStep.Solve.GAUSS_SEIDEL),
-            new Solver("GS omega=1", 1, false, 20, 1, true, SphereStep.Solve.GAUSS_SEIDEL),
-            new Solver("GS omega=1 10 it", 1, false, 1, 10, true, SphereStep.Solve.GAUSS_SEIDEL),
+            new Solver("GS omega=1", 1, false, 5, 1, true, SphereStep.Solve.GAUSS_SEIDEL_BY_CELL),
+            new Solver("GS omega=1", 1, false, 10, 1, true, SphereStep.Solve.GAUSS_SEIDEL_BY_CELL),
+            new Solver("GS omega=1", 1, false, 20, 1, true, SphereStep.Solve.GAUSS_SEIDEL_BY_CELL),
+            new Solver("GS omega=1 10 it", 1, false, 1, 10, true, SphereStep.Solve.GAUSS_SEIDEL_BY_CELL),
+            Solver.list(32, 10, 1),
+            Solver.list(32, 20, 1),
+            Solver.list(24, 10, 1),
+            Solver.list(48, 10, 1),
+            Solver.list(24, 20, 1),
+            Solver.list(24, 1, 10),
     };
 
     /** The large pile is slow every pair, so only the settings worth comparing. */
@@ -46,10 +63,16 @@ class SphereSweepTest {
             new Solver("averaged omega=1", 1, true, 20, 1, false),
             new Solver("grid averaged omega=1", 1, true, 10, 1, true),
             new Solver("grid averaged omega=1", 1, true, 20, 1, true),
-            new Solver("GS omega=1", 1, false, 5, 1, true, SphereStep.Solve.GAUSS_SEIDEL),
-            new Solver("GS omega=1", 1, false, 10, 1, true, SphereStep.Solve.GAUSS_SEIDEL),
-            new Solver("GS omega=1", 1, false, 20, 1, true, SphereStep.Solve.GAUSS_SEIDEL),
-            new Solver("GS omega=1 10 it", 1, false, 1, 10, true, SphereStep.Solve.GAUSS_SEIDEL),
+            new Solver("GS omega=1", 1, false, 5, 1, true, SphereStep.Solve.GAUSS_SEIDEL_BY_CELL),
+            new Solver("GS omega=1", 1, false, 10, 1, true, SphereStep.Solve.GAUSS_SEIDEL_BY_CELL),
+            new Solver("GS omega=1", 1, false, 20, 1, true, SphereStep.Solve.GAUSS_SEIDEL_BY_CELL),
+            new Solver("GS omega=1 10 it", 1, false, 1, 10, true, SphereStep.Solve.GAUSS_SEIDEL_BY_CELL),
+            Solver.list(32, 10, 1),
+            Solver.list(32, 20, 1),
+            Solver.list(24, 10, 1),
+            Solver.list(48, 10, 1),
+            Solver.list(24, 20, 1),
+            Solver.list(24, 1, 10),
     };
 
     /** Twenty spheres in a column a sphere wide, touching, under gravity for three seconds. */
@@ -115,6 +138,7 @@ class SphereSweepTest {
         scene.iterations = solver.iterations();
         scene.grid = solver.grid();
         scene.solve = solver.solve();
+        scene.rounds = solver.rounds();
         return scene;
     }
 
@@ -131,9 +155,12 @@ class SphereSweepTest {
         scene.advance(frames - 2);
         SphereDiagnostics state = scene.diagnostics();
         double ms = (System.nanoTime() - start) / 1e6 / (frames - 2);
-        System.out.println(String.format("%-22s %4d %3d  %-10.2e %-10.2e %-10.2e %-10.2e %-9.3f  %s%s",
+        int[] contacts = scene.contactCount();
+        String list = contacts == null ? "" : String.format("  missed %.1f a step, longest list %d",
+                contacts[Spheres.MISSED] / (double) frames, contacts[Spheres.LONGEST]);
+        System.out.println(String.format("%-22s %4d %3d  %-10.2e %-10.2e %-10.2e %-10.2e %-9.3f  %s%s%s",
                 solver.name(), solver.substeps(), solver.iterations(), state.maxOverlap(), state.maxWall(),
-                state.kinetic(), state.maxSpeed(), ms, extra.apply(scene), state.broken() ? "  BROKEN" : ""));
+                state.kinetic(), state.maxSpeed(), ms, extra.apply(scene), list, state.broken() ? "  BROKEN" : ""));
     }
 
     private static float max(float[] values) {

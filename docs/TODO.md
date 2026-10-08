@@ -72,9 +72,9 @@ the test fails by 0.39 m. `PileTest` runs with and without the grid.
 - **The broad phase does not settle anything.** The pile of 4096 still has 10% overlap and moving energy after
   4 s at 20 substeps, either way. That is the solver's, and Gauss–Seidel's to answer.
 
-## Gauss–Seidel by contact — built, measured: it settles, and is too slow for a pile
+## Gauss–Seidel by cell — built, measured: it settles, and is too slow for a pile
 
-`Spheres.solveContacts`, chosen by `SphereStep.Solve.GAUSS_SEIDEL`. The grid's cells are coloured by each index
+`Spheres.solveContacts`, chosen by `SphereStep.Solve.GAUSS_SEIDEL_BY_CELL`. The grid's cells are coloured by each index
 modulo three, 27 colours. A cell owns the contacts among its own spheres and with the 13 neighbouring cells after
 it, and solves them one after another, moving both spheres of each by their shares. Two cells of a colour are three
 apart, so nothing one reads or writes is the other's: no atomics. A pass is the 27 colours, then a walls pass.
@@ -111,13 +111,61 @@ same fault, a contact's two moves made from two states; moving both at once remo
   the cells it was sorted into are stale before the pass ends. Substeps are not only accuracy here; they keep the
   broad phase honest.
 
+## Gauss–Seidel over a contact list — built, measured: right, and a fifth of the cost by cell
+
+`SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT`: `Spheres.clearContacts`, `listContacts` and `contactRound`. After the
+sort, each substep lists every pair within 2% of touching. Then each pass is rounds, one dispatch each, with one
+invocation per contact. Every unsolved contact claims both its spheres by an atomic max of its priority, and a
+contact holding both solves in the next dispatch, moving both spheres as the by-cell solve does. Three claim arrays
+take turns (claimed into, checked, cleared), so a priority needs no room for its round. A pass is 32 rounds, one more
+dispatch to check the last, and the walls.
+
+**What holds**: everything the other solves hold, momentum to 1e-6 included, on both backends. Through one step of
+600 crowded spheres of mixed masses, momentum stays at zero to 1e-6, so no two contacts that share a sphere were ever
+solved in the same round.
+
+**Three findings on the way:**
+
+- **The order must be the same every substep.** Priorities first came from a contact's place in the list. The
+  atomic append makes that different every substep, and a settled pile of 343 stopped at 3.5e-2 J of moving energy,
+  where it should keep falling. Each substep solved the same contacts in another order and found a slightly
+  different answer, and the velocity felt the difference. Priorities from the pair `a · n + o` settle the same pile
+  to 5e-9 J, over 1000× below the by-cell solve. The by-cell solve still lists a cell's spheres in the sort's
+  unstable order, and its pile stops near 1e-4 J; its readings vary from run to run where the list's do not.
+- **Priorities should still change from round to round.** From the pair alone they never change, and a chain of
+  contacts each outranking the next is solved one a round. The pile of 4096 then needed 48 rounds. With the
+  dispatch mixed in, still the same in every substep, 32 rounds leave nothing unsolved. At 24, 16 contacts a step
+  were left, and 48 gives the same answer as 32, more slowly.
+- **List what is nearly touching, not only what touches.** A column at rest touches exactly, so its contacts were
+  not listed. When a correction pushed one sphere into the next, the overlap waited a substep and was then taken in
+  one move: 0.30 J where the by-cell solve has 8e-9. A margin of 2% of the radii's sum gives 4.8e-9 J. 10% and 30%
+  only lengthen the list, until the rounds run out.
+
+**Measured**, GPU, 60 Hz, 10 substeps, ω = 1 (Jacobi averaged); overlap / moving energy / ms a step:
+
+| Scene | Jacobi, grid | Gauss–Seidel by cell | Gauss–Seidel, list |
+| --- | --- | --- | --- |
+| Column of 20 | 3.6% / 4.1e-2 J / 0.16 | 2.1% / 8.0e-9 J / 0.19 | 2.1% / 4.8e-9 J / 0.63 |
+| Pile of 343 | 7.9% / 6.3e-3 J / 0.26 | 2.1% / 1.7e-3 J / 7.7 | 2.4% / 9.1e-6 J / 0.8–2.0 |
+| Pile of 4096 | 37% / 0.33 J / 0.33 | 8.7% / 0.13 J / 6.6 | 11% / 7.7e-2 J / 1.2 |
+| Pile of 4096, 20 substeps | 10% / 0.21 J / 0.60 | 2.8% / 3.4e-2 J / 12.8 | 3.3% / 0.11 J / 2.3 |
+
+- **It is the Gauss–Seidel to keep.** It is as right as by cell, rests better, and costs a fifth of it on the pile of
+  4096. The by-cell solve is left as a measured record, to delete.
+- **Jacobi is still cheaper for a pile's overlap.** At 4096, Jacobi at 20 substeps (10%, 0.60 ms) matches the list
+  at 10 (11%, 1.2 ms). What the list buys is rest: a stack or a settled pile goes still, and Jacobi's never does.
+- **The cost is dispatches.** 32 rounds and 4 more passes a substep, about 3 µs each. Most contacts are solved in
+  the first few rounds, and the rest of the dispatches find little to do. Timing varies up to twice from run to run
+  here, the list on the pile of 343 most.
+- **One substep is still not enough**, for the reason found by cell: 1 × 10 leaves the pile of 4096 coincident.
+
 ## Next
 
-- [ ] **Gauss–Seidel at the GPU's width.** The solve is right and the parallelism is wrong: one serial invocation
-      per cell, 27 times a pass. A contact list built after the sort, one entry per touching pair, and coloured
-      per contact so that no two of a colour share a sphere, would solve a colour with one invocation per contact:
-      as many colours as a sphere has contacts (12 at most for equal spheres), each wide. Measured against the
-      table above, on cost first.
+- [ ] **Gauss–Seidel's rounds, cheaper.** A pass is 33 dispatches whatever the list needs, and most of them find
+      little left to do. Count what each round solves first; then weigh fewer rounds, with what is left carried to
+      the next pass, against dispatching only as wide as what is left.
+- [ ] **The demo offers the solve**, Jacobi or Gauss–Seidel over the list, so a column can be watched coming to
+      rest; and the by-cell solve is deleted.
 - [ ] **Restitution**, as a velocity pass after the position solve, measured on a bounce's height.
 - [ ] **Rotation and friction**: an orientation per body, and friction at contacts, so a pile holds a slope and a
       sphere rolls.

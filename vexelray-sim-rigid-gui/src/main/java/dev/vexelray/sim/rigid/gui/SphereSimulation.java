@@ -66,6 +66,7 @@ public final class SphereSimulation implements AutoCloseable {
         runner.write("w", w);
         runner.write("r", r);
         runner.write("im", im);
+        step.constants().forEach(runner::write);
         runner.write("params", params);
         float[] shown = new float[Spheres.SHOWN_STRIDE * step.spheres];
         for (int s = 0; s < step.spheres; s++) {

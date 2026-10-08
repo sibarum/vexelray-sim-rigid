@@ -25,13 +25,13 @@ phase, on a counting sort that now lives in SupirVast, finds the same contacts a
 4096 spheres.
 
 Jacobi, every sphere solved at once, cannot rest a stack: a column of twenty sinks a few percent of a radius into
-itself and jitters. Gauss–Seidel, contact by contact in 27 colours over the grid, rests it at the same cost, with
-a five-millionth of the moving energy, and settles a pile six times as tightly; but on a pile it costs 20–33× as
-much, because each colour runs one serial invocation per cell. The demo runs Jacobi on the grid. There is no
-rotation, so no friction, and no restitution.
+itself and jitters. Gauss–Seidel over a contact list, solved in rounds of contacts that share no sphere, one
+invocation per contact, rests the column with under a millionth of Jacobi's moving energy, and lets a pile settle.
+On a pile of 4096 it costs 1.2 ms a step at 10 substeps, about twice what Jacobi costs for the same overlap. The
+demo runs Jacobi on the grid. There is no rotation, so no friction, and no restitution.
 
-Next is Gauss–Seidel at the GPU's width: a contact list, coloured per contact, one invocation per contact.
-[docs/TODO.md](docs/TODO.md) has the numbers and the rest of the list.
+Next is making Gauss–Seidel's rounds cheaper, and offering it in the demo. [docs/TODO.md](docs/TODO.md) has the
+numbers and the rest of the list.
 
 ## Running
 

@@ -2,7 +2,11 @@ package dev.vexelray.sim.rigid.sphere;
 
 import dev.vexelray.sim.rigid.sphere.Scene.Backend;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+import java.util.Arrays;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -14,12 +18,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class SpheresTest {
 
+    /** Every backend under every solve. */
+    static Stream<Arguments> everySolve() {
+        return Arrays.stream(Backend.values()).flatMap(backend -> Arrays.stream(SphereStep.Solve.values())
+                .map(solve -> Arguments.of(backend, solve)));
+    }
+
     /**
      * Unconstrained, a substep is symplectic Euler, whose discrete answer is exact: after {@code k} substeps of
      * {@code h}, {@code v = −g h k} and {@code y = y₀ − g h² k(k + 1) / 2}.
      */
     @ParameterizedTest
-    @CsvSource({"CPU, JACOBI", "CPU, GAUSS_SEIDEL", "GPU, JACOBI", "GPU, GAUSS_SEIDEL"})
+    @MethodSource("everySolve")
     void aFallingSphereFollowsSymplecticEulerExactly(Backend backend, SphereStep.Solve solve) {
         try (Scene scene = new Scene(1).uniform(0.1, 1)) {
             scene.sx = scene.sy = scene.sz = 10;
@@ -39,7 +49,7 @@ class SpheresTest {
 
     /** A dropped sphere lands, does not bounce (contact is inelastic), and rests on the floor rather than in it. */
     @ParameterizedTest
-    @CsvSource({"CPU, JACOBI", "CPU, GAUSS_SEIDEL", "GPU, JACOBI", "GPU, GAUSS_SEIDEL"})
+    @MethodSource("everySolve")
     void aDroppedSphereComesToRestOnTheFloor(Backend backend, SphereStep.Solve solve) {
         try (Scene scene = new Scene(1).uniform(0.1, 1)) {
             scene.x[0] = scene.z[0] = 0.5f;
@@ -59,7 +69,7 @@ class SpheresTest {
      * of 2 kg·m/s is kept, and the two leave together at 0.5 m/s, touching and not passing through each other.
      */
     @ParameterizedTest
-    @CsvSource({"CPU, JACOBI", "CPU, GAUSS_SEIDEL", "GPU, JACOBI", "GPU, GAUSS_SEIDEL"})
+    @MethodSource("everySolve")
     void aCollisionKeepsMomentumAndTheSpheresLeaveTogether(Backend backend, SphereStep.Solve solve) {
         try (Scene scene = new Scene(2).uniform(0.1, 1)) {
             scene.gy = 0;
