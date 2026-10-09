@@ -75,6 +75,9 @@ final class Physics implements AutoCloseable {
     private double stepMillis;
     private double gpuMillis;
     private double handBackMillis;
+    private double rounds;
+    private double waits;
+    private long unlisted;
     private SphereDiagnostics read;
 
     Physics(ComputeQueue queue, ShownRing ring, PhysicsNews news, Atchung bus, Dilated world) {
@@ -88,7 +91,8 @@ final class Physics implements AutoCloseable {
         this.noQueue = context == null
                 ? "No compute queue of its own (" + queue.why() + "), so there is no physics to draw." : "";
         if (context == null) {
-            news.report(new PhysicsNews.Report(scenario, false, 0, 0, 0, 0, null, 0, 0, 0, "", noQueue));
+            news.report(new PhysicsNews.Report(scenario, false, 0, 0, 0, 0, null, 0, 0, 0, "",
+                    SphereStep.Solve.JACOBI, 0, 0, 0, noQueue));
         }
     }
 
@@ -104,7 +108,7 @@ final class Physics implements AutoCloseable {
         omega = b.omega();
         averaged = b.averaged();
         news.report(PhysicsNews.Report.waiting(scenario));
-        SphereStep step = new SphereStep(from.n, b.substeps(), b.iterations(), from.grid());
+        SphereStep step = new SphereStep(from.n, b.substeps(), b.iterations(), from.grid(), b.solve());
         SphereRunner.Backend backend = b.backend();
         try {
             sim = runner.install(step, backend, from.extent, s -> s.start(from.x, from.y, from.z, from.u, from.v,
@@ -121,7 +125,8 @@ final class Physics implements AutoCloseable {
             simulated = 0;
         }
         read = null;
-        stepMillis = gpuMillis = handBackMillis = 0;
+        stepMillis = gpuMillis = handBackMillis = rounds = waits = 0;
+        unlisted = 0;
         world.discard();                // the steps owed while it was made are not this one's to run
         report();
         step(new Next());
@@ -150,6 +155,9 @@ final class Physics implements AutoCloseable {
             stepMillis = average(stepMillis, kept.step().wallNanos() / 1e6);
             gpuMillis = average(gpuMillis, kept.step().gpuNanos() / 1e6);
             handBackMillis = average(handBackMillis, kept.handBackNanos() / 1e6);
+            rounds = average(rounds, kept.step().solve().rounds());
+            waits = average(waits, kept.step().solve().waits());
+            unlisted += kept.step().solve().unlisted();
             if (steps % READ_EVERY == 0) {
                 float[][] now = sim.state();
                 read = SphereDiagnostics.of(now[0], now[1], now[2], now[3], now[4], now[5], state.r, state.im,
@@ -166,7 +174,8 @@ final class Physics implements AutoCloseable {
 
     private void report() {
         news.report(new PhysicsNews.Report(scenario, false, sim.spheres(), sim.substeps(), sim.iterations(),
-                simulated, read, stepMillis, gpuMillis, handBackMillis, sim.where(), problem));
+                simulated, read, stepMillis, gpuMillis, handBackMillis, sim.where(), sim.solve(), rounds, waits,
+                unlisted, problem));
     }
 
     /** The running simulation's state now, as a start for one of another shape. */

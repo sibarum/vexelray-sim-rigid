@@ -1,6 +1,7 @@
 package dev.vexelray.sim.rigid.demo;
 
 import dev.vexelray.sim.rigid.gui.SphereRunner;
+import dev.vexelray.sim.rigid.sphere.SphereStep;
 import sibarum.kronometer.Ratio;
 
 import java.util.List;
@@ -36,11 +37,16 @@ final class Controls {
     static final List<Ratio> SPEEDS = List.of(Ratio.of(1, 8), Ratio.of(1, 4), Ratio.of(1, 2), Ratio.of(1, 1),
             Ratio.of(2, 1));
 
+    /** The solves the panel offers: every sphere at once, or contact by contact until every contact is solved. */
+    static final List<SphereStep.Solve> SOLVES = List.of(SphereStep.Solve.JACOBI,
+            SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT);
+
     static final List<Integer> SUBSTEPS = List.of(1, 2, 5, 10, 20, 40);
     static final List<Integer> ITERATIONS = List.of(1, 2, 5, 10);
 
     private Scenario scenario = Scenario.COLUMN;
     private Solver solver = Solver.AVERAGED;
+    private SphereStep.Solve solve = SphereStep.Solve.JACOBI;
     private int substeps = 10;
     private int iterations = 1;
     private SphereRunner.Backend backend = SphereRunner.Backend.QUEUE;
@@ -72,6 +78,15 @@ final class Controls {
 
     synchronized void solver(Solver s) {
         solver = s;
+        version++;
+    }
+
+    synchronized SphereStep.Solve solve() {
+        return solve;
+    }
+
+    synchronized void solve(SphereStep.Solve s) {
+        solve = s;
         version++;
     }
 
@@ -142,6 +157,10 @@ final class Controls {
 
     synchronized long version() {
         return version;
+    }
+
+    static String solveLabel(SphereStep.Solve s) {
+        return s == SphereStep.Solve.JACOBI ? "Jacobi" : "Gauss–Seidel";
     }
 
     static String speedLabel(Ratio r) {

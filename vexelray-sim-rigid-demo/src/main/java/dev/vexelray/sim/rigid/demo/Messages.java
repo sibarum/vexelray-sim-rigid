@@ -1,6 +1,7 @@
 package dev.vexelray.sim.rigid.demo;
 
 import dev.vexelray.sim.rigid.gui.SphereRunner;
+import dev.vexelray.sim.rigid.sphere.SphereStep;
 import sibarum.atchung.Topic;
 
 /**
@@ -23,11 +24,12 @@ final class Messages {
 
     /**
      * A simulation of this shape, made on the physics lane and started from the scenario's start, or from where the
-     * running one has got to if {@code carry} and the scenario is the same, on {@code backend}. An edge: every one is
+     * running one has got to if {@code carry} and the scenario is the same, solved by {@code solve}, on
+     * {@code backend}. An edge: every one is
      * acted on.
      */
-    record Build(Scenario scenario, int substeps, int iterations, boolean carry, double omega, boolean averaged,
-                 SphereRunner.Backend backend) {
+    record Build(Scenario scenario, SphereStep.Solve solve, int substeps, int iterations, boolean carry, double omega,
+                 boolean averaged, SphereRunner.Backend backend) {
     }
 
     /** How the solve relaxes, from the next step on. A sample: only the newest matters. */

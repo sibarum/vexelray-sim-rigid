@@ -35,8 +35,6 @@ public final class SphereStep implements Buffered {
     public enum Solve {
         /** Every sphere against the state before the pass ({@link Spheres#solve()}), then all moved at once. */
         JACOBI,
-        /** Contact by contact, in 27 colours of the grid's cells, one serial invocation a cell. */
-        GAUSS_SEIDEL_BY_CELL,
         /** Contact by contact from a list, in rounds of contacts sharing no sphere: {@link Spheres#contactRound}. */
         GAUSS_SEIDEL_BY_CONTACT
     }
@@ -106,7 +104,7 @@ public final class SphereStep implements Buffered {
 
     /**
      * {@code substeps} substeps, each of {@code iterations} passes of {@code solve}, over {@code grid} if not null.
-     * Both Gauss–Seidels need the grid. {@code rounds} and {@code contactsPerSphere} size
+     * Gauss–Seidel needs the grid. {@code rounds} and {@code contactsPerSphere} size
      * {@link Solve#GAUSS_SEIDEL_BY_CONTACT}'s passes and list, and mean nothing to the others.
      */
     public SphereStep(int spheres, int substeps, int iterations, SphereGrid grid, Solve solve, int rounds,
@@ -172,20 +170,6 @@ public final class SphereStep implements Buffered {
                             List.of(Spheres.GRID_SOLVE_NAMES), spheres);
                     for (int it = 0; it < iterations; it++) {
                         iteration.add(List.of(solvePass, apply));
-                    }
-                }
-                case GAUSS_SEIDEL_BY_CELL -> {
-                    List<Pass> colours = new ArrayList<>();
-                    for (int colour = 0; colour < Spheres.COLOURS; colour++) {
-                        int cells = Spheres.cellsOf(grid, colour);
-                        if (cells > 0) {
-                            colours.add(new Pass("colour " + colour, Spheres.solveContacts(grid, colour),
-                                    Spheres.CONTACT_BUFFERS, List.of(Spheres.CONTACT_NAMES), cells));
-                        }
-                    }
-                    colours.add(walls);
-                    for (int it = 0; it < iterations; it++) {
-                        iteration.add(colours);
                     }
                 }
                 case GAUSS_SEIDEL_BY_CONTACT -> byContact(prepare, iteration, walls);
@@ -366,7 +350,7 @@ public final class SphereStep implements Buffered {
 
     /**
      * One step: per substep, predict, then the sort if there is a grid, and the contact list if the solve wants
-     * one; then {@link #iterations} passes of the solve — solve and apply for Jacobi, the colours or the rounds and
+     * one; then {@link #iterations} passes of the solve — solve and apply for Jacobi, the rounds and
      * then the walls for Gauss–Seidel — then velocity; and once at the end, {@link Spheres#show show}, for a
      * picture.
      */

@@ -7,6 +7,7 @@ import dev.vexelray.sim.rigid.demo.Messages.Build;
 import dev.vexelray.sim.rigid.demo.Messages.Relax;
 import dev.vexelray.sim.rigid.gui.ShownRing;
 import dev.vexelray.sim.rigid.gui.SphereRunner;
+import dev.vexelray.sim.rigid.sphere.SphereStep;
 import sibarum.atchung.Atchung;
 import sibarum.kronometer.Dilated;
 import sibarum.kronometer.Kron;
@@ -51,6 +52,7 @@ final class Session implements AutoCloseable {
     private int substeps;
     private int iterations;
     private SphereRunner.Backend backend;
+    private SphereStep.Solve solve;
     private Ratio speed = Ratio.of(1, 1);
     private boolean paused;
     private long frames;
@@ -108,14 +110,16 @@ final class Session implements AutoCloseable {
         int wantedSubsteps = controls.substeps();
         int wantedIterations = controls.iterations();
         SphereRunner.Backend wantedBackend = controls.backend();
+        SphereStep.Solve wantedSolve = controls.solve();
         if (reset || wantedScenario != scenario || wantedSubsteps != substeps || wantedIterations != iterations
-                || wantedBackend != backend) {
+                || wantedBackend != backend || wantedSolve != solve) {
             boolean carry = !reset && wantedScenario == scenario;
             scenario = wantedScenario;
             substeps = wantedSubsteps;
             iterations = wantedIterations;
             backend = wantedBackend;
-            bus.publish(Messages.BUILD_TOPIC, new Build(scenario, substeps, iterations, carry, solver.omega,
+            solve = wantedSolve;
+            bus.publish(Messages.BUILD_TOPIC, new Build(scenario, solve, substeps, iterations, carry, solver.omega,
                     solver.averaged, backend));
         }
     }

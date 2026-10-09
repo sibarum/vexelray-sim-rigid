@@ -97,18 +97,12 @@ import static dev.supirvast.vastir.build.Body.v;
  *
  * <h2>Gauss–Seidel</h2>
  *
- * Two passes that solve contact after contact, each against the positions the ones before it left, moving both
- * spheres of a contact at once; then {@link #walls}. A stack hears its own weight within one pass, which Jacobi
- * cannot.
- *
- * <ul>
- *   <li>{@link #contactRound}: over a list of contacts made each substep ({@link #listContacts}), in rounds that
- *       each solve a set of contacts sharing no sphere, one invocation a contact. The one to use.</li>
- *   <li>{@link #solveContacts}: in 27 colours of the grid's cells, one serial invocation a cell. As right, and
- *       five times the cost; kept as a measured record.</li>
- * </ul>
- *
- * Both are measured in {@code docs/TODO.md}, with what they cost.
+ * Contact after contact, each against the positions the ones before it left, moving both spheres of a contact at
+ * once; then {@link #walls}. A stack hears its own weight within one pass, which Jacobi cannot.
+ * {@link #contactRound} works over a list of contacts made each substep ({@link #listContacts}), in rounds that each
+ * solve a set of contacts sharing no sphere, one invocation a contact, until none is left open. A first version, in
+ * 27 colours of the grid's cells with one serial invocation a cell, was as right and five times the cost, and is
+ * gone; {@code docs/TODO.md} keeps its measurements.
  *
  * <h2>What it is not, yet</h2>
  *
@@ -258,91 +252,13 @@ public final class Spheres {
         return function("spheresGridSolve", b);
     }
 
-    static final String[] CONTACT_NAMES = {"x", "y", "z", "r", "im", "dx", "dy", "dz", "params", "starts", "order"};
-    static final List<Buffer> CONTACT_BUFFERS = bind(CONTACT_NAMES, 9);
-
-    /** How many colours {@link #solveContacts} takes: each of a cell's indices, modulo three. */
-    public static final int COLOURS = 27;
-
-    /**
-     * Gauss–Seidel by contact: one pass of the 27 solves the contacts owned by the cells of one colour, a colour
-     * being each of a cell's indices modulo three, and moves both spheres of each contact at once, by their shares
-     * of its overlap by inverse mass.
-     *
-     * <p>A cell owns the contacts between its own spheres, and those between its spheres and the spheres of the 13
-     * cells around it that come after it — so every contact has one owner. A cell writes only its own spheres and
-     * those of its neighbours, and two cells of a colour are three cells apart, so what one reads and writes the
-     * other never touches: each colour is parallel and needs no atomics. A correction made by one colour is what the
-     * next colour sees, within the same pass; which is what Jacobi lacks, and why a stack hears its own weight late
-     * under it.
-     *
-     * <p>One invocation per cell of the colour, {@link #cellsOf} of them, which works through its contacts one after
-     * another, each against the positions as the ones before it left them. Both spheres of a contact move together,
-     * so the contact's moves are equal and opposite by mass, and are added up as computed as the Jacobi moves are.
-     * Moving one sphere a turn instead, each taking its share of the overlap it saw, was measured and is wrong: the
-     * second of a pair sees an overlap the first has shrunk, and a collision of 1 kg into 3 kg gained a quarter of
-     * its momentum.
-     *
-     * <p>Every contact takes {@code ω} of its correction; the {@link #AVERAGED} parameter means nothing here, since
-     * no contact is solved twice from one state. The walls are not here: {@link #walls} follows the colours.
-     */
-    public static Function solveContacts(SphereGrid grid, int colour) {
-        List<Buffer> bs = CONTACT_BUFFERS;
-        Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
-        Buffer radius = bs.get(3);
-        Buffer im = bs.get(4);
-        Buffer[] displaced = {bs.get(5), bs.get(6), bs.get(7)};
-        Buffer params = bs.get(8);
-        Buffer starts = bs.get(9);
-        Buffer order = bs.get(10);
-        int nx = grid.nx();
-        int ny = grid.ny();
-        int nz = grid.nz();
-        int[] rest = {colour % 3, colour / 3 % 3, colour / 9};
-        int hx = third(nx, rest[0]);
-        int hy = third(ny, rest[1]);
-
-        Body b = new Body();
-        LocalVar id = b.let("id", new Expr.InvocationId());
-        b.when(lt(v(id), new Expr.InvocationCount()), t -> {
-            LocalVar ix = t.let("ix", add(mul(mod(v(id), i(hx)), i(3)), i(rest[0])));
-            LocalVar iy = t.let("iy", add(mul(mod(div(v(id), i(hx)), i(hy)), i(3)), i(rest[1])));
-            LocalVar iz = t.let("iz", add(mul(div(v(id), i(hx * hy)), i(3)), i(rest[2])));
-            LocalVar own = t.let("own", add(v(ix), mul(i(nx), add(v(iy), mul(i(ny), v(iz))))));
-            LocalVar omega = t.let("omega", load(params, i(OMEGA)));
-            LocalVar ka = t.let("ka", load(starts, v(own)));
-            LocalVar endA = t.let("endA", load(starts, add(v(own), i(1))));
-            t.loop(lt(v(ka), v(endA)), first -> {
-                LocalVar a = first.let("a", load(order, v(ka)));
-                // The own cell is the middle of the 27, and the 13 after it are the cells it owns contacts with.
-                LocalVar n = first.let("n", i(13));
-                first.loop(lt(v(n), i(27)), next -> {
-                    LocalVar jx = next.let("jx", add(v(ix), sub(mod(v(n), i(3)), i(1))));
-                    LocalVar jy = next.let("jy", add(v(iy), sub(mod(div(v(n), i(3)), i(3)), i(1))));
-                    LocalVar jz = next.let("jz", add(v(iz), sub(div(v(n), i(9)), i(1))));
-                    next.when(and(within(jx, nx), and(within(jy, ny), within(jz, nz))), inside -> {
-                        LocalVar cell = inside.let("cell", add(v(jx), mul(i(nx), add(v(jy), mul(i(ny), v(jz))))));
-                        LocalVar kb = inside.let("kb", load(starts, v(cell)));
-                        // Within the own cell, each pair once: only the spheres after this one.
-                        inside.when(eq(v(n), i(13)), same -> same.set(kb, add(v(ka), i(1))));
-                        LocalVar endB = inside.let("endB", load(starts, add(v(cell), i(1))));
-                        inside.loop(lt(v(kb), v(endB)), second -> {
-                            LocalVar o = second.let("o", load(order, v(kb)));
-                            contact(second, a, o, at, radius, im, displaced, omega);
-                            second.set(kb, add(v(kb), i(1)));
-                        });
-                    });
-                    next.set(n, add(v(n), i(1)));
-                });
-                first.set(ka, add(v(ka), i(1)));
-            });
-        });
-        return function("spheresSolveContacts" + colour, b);
-    }
-
     /**
      * Spheres {@code a} and {@code o} parted, if they overlap: each moved along the line between them by its share
      * of {@code ω} times the overlap, by inverse mass, and each move added to what the constraints have moved it.
+     *
+     * <p>Both at once, from one reading of their positions: so the two moves are equal and opposite by mass. Moving one
+     * sphere a turn, each by its share of the overlap it saw, was measured and is wrong: the second of a pair sees an
+     * overlap the first has shrunk, and a collision of 1 kg into 3 kg gained a quarter of its momentum.
      */
     private static void contact(Body b, LocalVar a, LocalVar o, Buffer[] at, Buffer radius, Buffer im,
                                 Buffer[] displaced, LocalVar omega) {
@@ -372,16 +288,6 @@ public final class Spheres {
                                 touching.store(displaced[axis], v(o), add(load(displaced[axis], v(o)), v(mo)));
                             }
                         })));
-    }
-
-    /** The cells of {@code grid} that {@link #solveContacts} visits for {@code colour}: zero where it has none. */
-    public static int cellsOf(SphereGrid grid, int colour) {
-        return third(grid.nx(), colour % 3) * third(grid.ny(), colour / 3 % 3) * third(grid.nz(), colour / 9);
-    }
-
-    /** How many of the indices {@code [0, n)} are {@code rest} modulo three. */
-    private static int third(int n, int rest) {
-        return Math.max(0, (n - rest + 2) / 3);
     }
 
     // --- Gauss–Seidel over a contact list ------------------------------------------------------------------
@@ -512,7 +418,7 @@ public final class Spheres {
     /**
      * One invocation per place in the list, {@code capacity} of them: one round of solving the contacts in sets no
      * two of which share a sphere, which is what lets a set be solved in parallel, each contact moving both its
-     * spheres as {@link #solveContacts} does.
+     * spheres at once ({@link #contact}).
      *
      * <p>A round has two halves, and a dispatch is the second half of one round and the first of the next:
      *
@@ -646,7 +552,7 @@ public final class Spheres {
     static final List<Buffer> WALLS_BUFFERS = bind(WALLS_NAMES);
 
     /**
-     * One invocation per sphere, after {@link #solveContacts}' colours: the sphere projected back inside the walls,
+     * One invocation per sphere, after a pass of {@link #contactRound}s: the sphere projected back inside the walls,
      * as {@link #apply} does after the Jacobi move, and the push added to what the constraints have moved it.
      */
     public static Function walls() {

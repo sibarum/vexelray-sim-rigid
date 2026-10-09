@@ -151,7 +151,7 @@ solved in the same round.
 | Pile of 4096, 20 substeps | 10% / 0.21 J / 0.60 | 2.8% / 3.4e-2 J / 12.8 | 3.3% / 0.11 J / 2.3 |
 
 - **It is the Gauss–Seidel to keep.** It is as right as by cell, rests better, and costs a fifth of it on the pile of
-  4096. The by-cell solve is left as a measured record, to delete.
+  4096. The by-cell solve was left as a measured record, and is now deleted; these numbers are what is kept of it.
 - **Jacobi is still cheaper for a pile's overlap.** At 4096, Jacobi at 20 substeps (10%, 0.60 ms) matches the list
   at 10 (11%, 1.2 ms). What the list buys is rest: a stack or a settled pile goes still, and Jacobi's never does.
 - **The cost is dispatches.** 32 rounds and 4 more passes a substep, about 3 µs each. Most contacts are solved in
@@ -201,8 +201,10 @@ contacts a step unsolved on the pile of 4096.
       vexelray-framework, Kronometer and this repo, each recorded with its measurements in
       [physics-timing.md](physics-timing.md). Left from it: a slice size of 32 as the default, a hard ceiling on a
       runaway step, Gauss–Seidel and another machine in the profile, and the hitch at a rebuild.
-- [ ] **The demo offers the solve**, Jacobi or Gauss–Seidel over the list, so a column can be watched coming to
-      rest; and the by-cell solve is deleted.
+- [x] **The demo offers the solve** (2026-10-08): Jacobi, or Gauss–Seidel over the list run until every contact is
+      solved, with its rounds and waits a step in the readings. In the demo the column rests under Gauss–Seidel at
+      2.1% overlap and 7e-9 J, against Jacobi's 4.0% and 9e-5 J, for 160 rounds and 10 waits a step. The by-cell
+      solve is deleted.
 - [ ] **Restitution**, as a velocity pass after the position solve, measured on a bounce's height.
 - [ ] **Rotation and friction**: an orientation per body, and friction at contacts, so a pile holds a slope and a
       sphere rolls.

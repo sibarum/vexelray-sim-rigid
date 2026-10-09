@@ -6,6 +6,7 @@ import dev.vexelray.gui.core.layout.LayoutEnums.Direction;
 import dev.vexelray.gui.core.layout.Length;
 import dev.vexelray.gui.core.style.Role;
 import dev.vexelray.sim.core.gui.DemoLook;
+import dev.vexelray.sim.rigid.sphere.SphereStep;
 import sibarum.kronometer.Dilated;
 
 import java.util.EnumMap;
@@ -18,7 +19,7 @@ import java.util.Map;
  */
 final class Readings {
 
-    enum Line { ABOUT, TIME, OVERLAP, ENERGY, SPEED, COST, DILATION, PROBLEM, KEYS }
+    enum Line { ABOUT, TIME, OVERLAP, ENERGY, SPEED, SOLVE, COST, DILATION, PROBLEM, KEYS }
 
     private final Node panel;
     private final Map<Line, Node> nodes = new EnumMap<>(Line.class);
@@ -56,8 +57,8 @@ final class Readings {
         set(Line.ABOUT, r.scenario().about);
         // Read every time, building or not: a world that is waiting for its kernels is a world running slow.
         double dilation = world.dilation();
-        set(Line.DILATION, String.format("World speed       %3.0f%% of the wall's · %d steps forgiven · a step"
-                + " every %.1f ms", 100 * dilation, world.forgiven(), world.predicted().nanos() / 1e6));
+        set(Line.DILATION, String.format("World speed       %3.0f%% · %d forgiven · a step %.1f ms",
+                100 * dilation, world.forgiven(), world.predicted().nanos() / 1e6));
         set(Line.PROBLEM, !r.problem().isEmpty() ? r.problem()
                 : r.state() != null && r.state().broken() ? "A position or velocity is not a number." : "");
         if (r.building()) {
@@ -71,8 +72,23 @@ final class Readings {
             set(Line.ENERGY, String.format("Moving energy     %.2e J", r.state().kinetic()));
             set(Line.SPEED, String.format("Fastest sphere    %.3f m/s", r.state().maxSpeed()));
         }
-        set(Line.COST, String.format("A step %.2f ms (%.2f on the GPU) on %s · to the picture %.2f ms · the picture"
-                + " %.2f ms", r.stepMillis(), r.gpuMillis(), r.where(), r.handBackMillis(), drawMillis));
+        set(Line.SOLVE, solve(r));
+        set(Line.COST, String.format("Step %.2f ms (GPU %.2f) · hand-back %.2f · picture %.2f",
+                r.stepMillis(), r.gpuMillis(), r.handBackMillis(), drawMillis));
+    }
+
+    /**
+     * How the contacts were solved: Jacobi, every sphere against the state before the pass; or Gauss–Seidel, run until
+     * every contact is solved, with what that took a step.
+     */
+    private static String solve(PhysicsNews.Report r) {
+        if (r.solve() == SphereStep.Solve.JACOBI) {
+            return "Solve             Jacobi, every sphere at once";
+        }
+        String solved = String.format("Every contact solved · %.0f rounds, %.1f waits", r.rounds(),
+                r.waits());
+        return r.unlisted() == 0 ? solved
+                : solved + String.format(" · %d contacts did not fit the list and were not", r.unlisted());
     }
 
     private void set(Line line, String text) {

@@ -40,7 +40,7 @@ final class Scene implements AutoCloseable {
     boolean averaged = true;
     /** Whether the solve searches a grid, its cells as wide as the widest sphere, or tests every pair. */
     boolean grid;
-    /** How a pass solves; both Gauss–Seidels search the grid whatever {@link #grid} says. */
+    /** How a pass solves; Gauss–Seidel searches the grid whatever {@link #grid} says. */
     SphereStep.Solve solve = SphereStep.Solve.JACOBI;
     /** Rounds a pass, for Gauss–Seidel over the contact list when {@link #fixedRounds}. */
     int rounds = SphereStep.ROUNDS;

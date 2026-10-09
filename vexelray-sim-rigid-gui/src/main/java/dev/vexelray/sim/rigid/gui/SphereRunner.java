@@ -27,9 +27,9 @@ public final class SphereRunner implements AutoCloseable {
 
     /** Where a simulation runs. */
     public enum Backend {
-        QUEUE("This GPU, on a queue of its own"),
-        INTEGRATED("The integrated GPU"),
-        CPU("The CPU, through Truffle");
+        QUEUE("This GPU"),
+        INTEGRATED("Integrated GPU"),
+        CPU("CPU (Truffle)");
 
         public final String label;
 

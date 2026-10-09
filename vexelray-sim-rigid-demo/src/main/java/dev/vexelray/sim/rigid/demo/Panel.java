@@ -42,6 +42,8 @@ final class Panel {
         settings = new Inspector(gui).add(
                 new Pick<>("Scenario", "Scenario", List.of(Scenario.values()), s -> s.label, controls::scenario,
                         controls::scenario),
+                new Pick<>("Solver", "Solve", Controls.SOLVES, Controls::solveLabel, controls::solve,
+                        controls::solve),
                 new Pick<>("Solver", "Relaxation", List.of(Solver.values()), s -> s.label, controls::solver,
                         controls::solver),
                 new Pick<>("Solver", "Substeps", Controls.SUBSTEPS, String::valueOf, controls::substeps,
