@@ -30,10 +30,11 @@ invocation per contact, rests the column with under a millionth of Jacobi's movi
 On a pile of 4096 it costs 1.2 ms a step at 10 substeps, about twice what Jacobi costs for the same overlap. The
 demo runs Jacobi on the grid. There is no rotation, so no friction, and no restitution.
 
-The physics timing in [docs/physics-timing.md](docs/physics-timing.md) is four stages in: every contact solved every
-step, physics on a second Vulkan queue and a thread of its own, and finished steps handed to the frame through a
-ring, so the frame rate holds while physics runs. Next is the clock that counts game time by finished steps, so that
-time dilates rather than frames drop. [docs/TODO.md](docs/TODO.md) has the numbers and the rest of the list.
+The physics timing in [docs/physics-timing.md](docs/physics-timing.md) is five stages in: every contact solved every
+step, physics on a second Vulkan queue and a thread of its own, finished steps handed to the frame through a ring,
+and a world clock counted by the steps that finish. When steps get slow the world slows and says by how much, and
+the frame rate does not move. Next is measuring the backends: the integrated GPU and the CPU against the second
+queue. [docs/TODO.md](docs/TODO.md) has the numbers and the rest of the list.
 
 ## Running
 
@@ -57,4 +58,4 @@ Opens the demo. Space pauses, R resets, N moves to the next scenario, `=` and `-
 the camera back; drag in the picture to turn it and use the wheel to zoom. With `-Dautomation=0` it opens an automation
 socket, and `ottermate` (in `vexelray-gui/vexelray-gui-automation-cli`) can drive it and photograph the window. The
 readings are landmarks named `reading.about`, `reading.time`, `reading.overlap`, `reading.energy`, `reading.speed`,
-`reading.cost` and `reading.dropped`.
+`reading.cost` and `reading.dilation`.

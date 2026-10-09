@@ -13,13 +13,18 @@ import dev.vexelray.sim.core.gui.DemoLook;
 import dev.vexelray.sim.core.gui.Orbit;
 import dev.vexelray.sim.rigid.gui.ShownRing;
 import sibarum.atchung.Atchung;
+import sibarum.kronometer.Dilated;
+import sibarum.kronometer.Dur;
+import sibarum.kronometer.Ratio;
+import sibarum.kronometer.Tempo;
 
 /**
  * What the demo builds, one recipe a part, and nothing about when: {@code RigidDemoWiring} is generated from this and
  * from {@link Physics}, and builds each part in the phase its parameters put it in.
  *
- * <p>Two parts are shared between the frame and the physics lane, and are the only two: the {@link ShownRing} the
- * finished steps go through, and the {@link PhysicsNews} the readings do. Everything else crosses as a message.
+ * <p>Three parts are shared between the frame and the physics lane, and are the only three: the world's clock, which
+ * says when a step is due and counts the ones that finish; the {@link ShownRing} the finished steps go through; and the
+ * {@link PhysicsNews} the readings do. Everything else crosses as a message.
  */
 @Configuration
 final class Recipes {
@@ -50,6 +55,22 @@ final class Recipes {
         return new PhysicsNews();
     }
 
+    /** The playback tempo, which the speed control scales: the world's time runs inside it. */
+    @Provides
+    Tempo playback(KronoGui krono) {
+        return krono.kron().tempo().child("playback", Ratio.of(1, 1));
+    }
+
+    /**
+     * The world's clock, counted by the steps that finish ({@link Dilated}): a fixed 60 Hz grid in the playback tempo
+     * says when a step is due, and a world more than {@link Physics#MOST_BEHIND} steps behind slows rather than
+     * hurry. Shared by the physics lane, which runs the steps, and the frame, which blends by it.
+     */
+    @Provides
+    Dilated world(Tempo playback) {
+        return playback.fixed("physics", Dur.hz(1 / Physics.STEP_SECONDS)).dilated(Physics.MOST_BEHIND);
+    }
+
     @Provides
     Ui ui(Gui gui, TitleBar titleBar, Controls controls, Orbit orbit) {
         return new Ui(gui, titleBar, controls, orbit);
@@ -59,7 +80,7 @@ final class Recipes {
     @Provides
     @MainThread
     Session session(GuiApp app, Ui ui, Controls controls, ShownRing ring, PhysicsNews news, Atchung bus,
-                    KronoGui krono) {
-        return new Session(app, ui, controls, ring, news, bus, krono);
+                    KronoGui krono, Tempo playback, Dilated world) {
+        return new Session(app, ui, controls, ring, news, bus, krono.kron(), playback, world);
     }
 }

@@ -6,6 +6,7 @@ import dev.vexelray.gui.core.layout.LayoutEnums.Direction;
 import dev.vexelray.gui.core.layout.Length;
 import dev.vexelray.gui.core.style.Role;
 import dev.vexelray.sim.core.gui.DemoLook;
+import sibarum.kronometer.Dilated;
 
 import java.util.EnumMap;
 import java.util.Map;
@@ -17,7 +18,7 @@ import java.util.Map;
  */
 final class Readings {
 
-    enum Line { ABOUT, TIME, OVERLAP, ENERGY, SPEED, COST, DROPPED, PROBLEM, KEYS }
+    enum Line { ABOUT, TIME, OVERLAP, ENERGY, SPEED, COST, DILATION, PROBLEM, KEYS }
 
     private final Node panel;
     private final Map<Line, Node> nodes = new EnumMap<>(Line.class);
@@ -51,8 +52,12 @@ final class Readings {
      * What the physics lane last reported, and what the picture costs the frame. While a simulation is being made,
      * only that it is.
      */
-    void show(PhysicsNews.Report r, double drawMillis, boolean paused) {
+    void show(PhysicsNews.Report r, Dilated world, double drawMillis, boolean paused) {
         set(Line.ABOUT, r.scenario().about);
+        // Read every time, building or not: a world that is waiting for its kernels is a world running slow.
+        double dilation = world.dilation();
+        set(Line.DILATION, String.format("World speed       %3.0f%% of the wall's · %d steps forgiven · a step"
+                + " every %.1f ms", 100 * dilation, world.forgiven(), world.predicted().nanos() / 1e6));
         set(Line.PROBLEM, !r.problem().isEmpty() ? r.problem()
                 : r.state() != null && r.state().broken() ? "A position or velocity is not a number." : "");
         if (r.building()) {
@@ -68,7 +73,6 @@ final class Readings {
         }
         set(Line.COST, String.format("A step %.2f ms (%.2f on the GPU) · the picture %.2f ms", r.stepMillis(),
                 r.gpuMillis(), drawMillis));
-        set(Line.DROPPED, String.format("Steps dropped     %d (the world slowed)", r.dropped()));
     }
 
     private void set(Line line, String text) {

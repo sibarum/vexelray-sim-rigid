@@ -60,18 +60,6 @@ class ShownRingTest {
     }
 
     @Test
-    void theBlendRunsOverTheLastIntervalAndHoldsAtOne() {
-        ShownRing ring = new ShownRing();
-        ring.install(generation(1));
-        ring.publish(1, 1_000);
-        ring.publish(2, 11_000);
-        ShownRing.Frame frame = ring.take();
-        assertEquals(10_000, frame.intervalNanos());
-        assertEquals(0.5f, frame.alpha(16_000), 1e-6);
-        assertEquals(1f, frame.alpha(50_000), "held at the newest step rather than run past it");
-    }
-
-    @Test
     void anOldGenerationIsRetiredOnlyOnceTheFrameHasMovedPastIt() {
         ShownRing ring = new ShownRing();
         ShownRing.Generation one = generation(1);

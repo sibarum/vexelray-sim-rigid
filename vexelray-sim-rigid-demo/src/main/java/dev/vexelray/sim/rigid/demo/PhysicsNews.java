@@ -18,18 +18,17 @@ final class PhysicsNews {
      * @param spheres    how many, for the running one
      * @param substeps   its substeps a step
      * @param iterations its iterations a substep
-     * @param simulated  seconds of world time run since the scenario started
+     * @param simulated  seconds of world time run since the scenario started, counted by its finished steps
      * @param state      the readings of the state, as of the last time they were read back; null before then
      * @param stepMillis a step's wall time on the physics thread, averaged
      * @param gpuMillis  a step's time on the GPU, averaged
-     * @param dropped    steps the clock made due that were never run, because physics was behind: time that slowed
      * @param problem    why there is no physics, or an empty string
      */
     record Report(Scenario scenario, boolean building, int spheres, int substeps, int iterations, double simulated,
-                  SphereDiagnostics state, double stepMillis, double gpuMillis, long dropped, String problem) {
+                  SphereDiagnostics state, double stepMillis, double gpuMillis, String problem) {
 
         static Report waiting(Scenario scenario) {
-            return new Report(scenario, true, 0, 0, 0, 0, null, 0, 0, 0, "");
+            return new Report(scenario, true, 0, 0, 0, 0, null, 0, 0, "");
         }
     }
 

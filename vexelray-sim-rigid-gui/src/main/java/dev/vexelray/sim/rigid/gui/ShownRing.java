@@ -76,21 +76,8 @@ public final class ShownRing {
      * @param slot          which slot
      * @param step          its number in the generation, counting from one; the timeline reached this value with it
      * @param finishedNanos when it was published, on {@link System#nanoTime}'s clock
-     * @param intervalNanos how long after the step before it, or 0 for the first: what a frame blends over
      */
-    public record Frame(Generation generation, int slot, long step, long finishedNanos, long intervalNanos) {
-
-        /**
-         * How far a frame at {@code nowNanos} is into the step after this one, from 0 to 1: the share of the last
-         * interval that has passed since it finished, held at 1 rather than run past it. The picture blends each
-         * sphere that far from where the step before left it to where this one did.
-         */
-        public float alpha(long nowNanos) {
-            if (intervalNanos <= 0) {
-                return 1f;
-            }
-            return (float) Math.min(1.0, Math.max(0.0, (nowNanos - finishedNanos) / (double) intervalNanos));
-        }
+    public record Frame(Generation generation, int slot, long step, long finishedNanos) {
     }
 
     private Generation generation;
@@ -102,7 +89,6 @@ public final class ShownRing {
     private int back;
     private final long[] steps = new long[SLOTS];
     private final long[] finished = new long[SLOTS];
-    private final long[] intervals = new long[SLOTS];
     private Frame taken;
 
     /**
@@ -129,15 +115,8 @@ public final class ShownRing {
      * the frame can take, and the next step goes in a slot the frame is not reading and has not been offered.
      */
     public synchronized void publish(long step, long finishedNanos) {
-        long last = 0;
-        if (ready >= 0) {
-            last = finished[ready];
-        } else if (front >= 0 && frontGeneration == generation) {
-            last = finished[front];
-        }
         steps[back] = step;
         finished[back] = finishedNanos;
-        intervals[back] = last == 0 ? 0 : finishedNanos - last;
         ready = back;
         for (int k = 0; k < SLOTS; k++) {
             if (k != ready && !(frontGeneration == generation && k == front)) {
@@ -169,7 +148,7 @@ public final class ShownRing {
             front = ready;
             frontGeneration = generation;
             ready = -1;
-            taken = new Frame(generation, front, steps[front], finished[front], intervals[front]);
+            taken = new Frame(generation, front, steps[front], finished[front]);
         }
         return taken;
     }

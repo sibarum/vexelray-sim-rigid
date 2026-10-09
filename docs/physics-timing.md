@@ -218,6 +218,48 @@ Not yet:
 
 ### 5. Kronometer: a dilated clock
 
+**Built** (Kronometer and this repo; the demo runs on it).
+
+- **`Dilated` is a new kind of domain**, not a setting of an existing one: `rate.dilated(mostBehind)`.
+  - **Due:** the fixed grid still says when a step is due, in its tempo. The world never runs ahead of the wall.
+  - **Counted:** game time is the steps that finish times `dt`.
+  - **Forgiven, not repaid:** steps owed past `mostBehind` (two, in the demo) are never run, and game time falls
+    behind.
+  - **Not a settlement:** stretching the timeline would have slowed the interface's animation with the world.
+    Kronometer's own design rules that out, since slip belongs to its one timeline.
+  - `DilatedTest`, on a driven clock, holds each of these.
+- **The blend is a prediction, and differs from this plan in one way.** The phase is the time since the newest
+  finished step over the predicted interval to the next. Each finished step corrects it, taking in a quarter of the
+  new interval.
+  - The plan measured from when a step *started*, over its predicted duration. When physics is faster than real
+    time, a step takes 1 ms and then waits for the grid, so that phase would reach 1 after 1 ms and hold the
+    picture still for the other 15.
+  - The interval between finishes is the grid's at full speed and the step's own cost when the world is slowed,
+    so the picture moves at the pace steps really land at either way.
+  - A pause is not taken into the prediction, and nothing that came due before a release is run.
+- **Two clocks in the demo.** The physics lane runs steps while the world's clock says one is due; the clock wakes
+  it, on the timeline, as each comes due. The frame blends by the clock's phase. The panel, the camera and the
+  interface stay on the wall's time. The playback speed scales the world's tempo, as before.
+- **Dilation is a reading:** "World speed 80% of the wall's · 803 steps forgiven · a step every 10.3 ms". It is
+  taken over 60 due steps, so it is steady rather than jumping frame to frame.
+
+**Measured**, in the demo: the pile of 1000 at 2× speed and 40 × 10 per step, where a step costs about 9.5 ms
+against the 8.3 ms the grid allows.
+
+- **The world slows to 77–81%**, which is what the arithmetic says. The predicted interval follows the steps at
+  about 10.3 ms.
+- **The frame rate does not move:** 144 frames a second, each second, with the longest frame about 9 ms, while
+  physics takes 9 ms of GPU time a step.
+- One 97 ms frame at the moment of the rebuild, as at a scenario switch in stage 4: still unexplained.
+- Pause and resume: game time stops while held, and the prediction comes back at the steps' own interval, not the
+  pause's.
+
+Not yet:
+
+- **Input taken at the steps.** The demo has no character to steer. The clock is what a game's input would be
+  sampled on: at `take()`, with the step's `dt`.
+- **A hard ceiling on a runaway step,** reported as an overrun, which the risks below still ask for.
+
 - **Game time advances by `dt` per finished step.** It is not scheduled against the wall at all; it is counted.
   `STRETCH` is the nearest settlement, and the dilated clock may be a new kind of domain rather than a setting of an
   existing one.

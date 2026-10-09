@@ -3,35 +3,31 @@ package dev.vexelray.sim.rigid.demo;
 import dev.vexelray.framework.api.BeforeFrame;
 import dev.vexelray.framework.api.MainThread;
 import dev.vexelray.gui.core.app.GuiApp;
-import dev.vexelray.gui.krono.KronoGui;
-import dev.vexelray.sim.rigid.demo.Messages.Allow;
 import dev.vexelray.sim.rigid.demo.Messages.Build;
 import dev.vexelray.sim.rigid.demo.Messages.Relax;
 import dev.vexelray.sim.rigid.gui.ShownRing;
 import sibarum.atchung.Atchung;
-import sibarum.kronometer.Dur;
-import sibarum.kronometer.Handoff;
+import sibarum.kronometer.Dilated;
 import sibarum.kronometer.Kron;
-import sibarum.kronometer.Rate;
 import sibarum.kronometer.Ratio;
 import sibarum.kronometer.Tempo;
 
 /**
- * The frame's side of the demo, on the main thread: what the user asked for told to {@link Physics}, the steps the
- * clock has made due counted for it, and the newest finished step drawn.
+ * The frame's side of the demo, on the main thread: what the user asked for told to {@link Physics}, and the newest
+ * finished step drawn.
  *
- * <h2>The timing is Kronometer's</h2>
+ * <h2>Two clocks</h2>
  *
- * The physics is a fixed 60 Hz {@link Rate} inside a {@link Tempo} the playback speed scales, so a quarter speed is the
- * same steps a quarter as often. The frame does not run them: it counts the steps the rate made due and tells the
- * physics lane how many there have been ({@link Allow}), and the physics lane runs them. A pause {@linkplain
- * Handoff#hold holds} the handoff, which parks the rate.
+ * The world runs on its own time ({@link Dilated}): a fixed 60 Hz grid inside the playback tempo says when a step is
+ * due, and the physics lane counts the steps that finish. When steps get slow the world slows, and its time falls
+ * behind the wall's; this reads how far as the <i>dilation</i>. Everything else here, the panel and the camera among
+ * it, is on the wall's time and never slows with the world.
  *
  * <h2>The frame never waits for a step</h2>
  *
- * It draws whatever the ring's newest finished step is, blended from the step before it by how far the frame is into
- * the step after, measured by how long the last step took. A step that takes longer than a frame leaves the picture
- * on the last finished step until it lands; the frame rate does not move.
+ * It draws the ring's newest finished step, blended from the one before by how far the frame is towards the next,
+ * as the world's clock predicts it ({@link Dilated#phase}). A step later than predicted leaves the picture on the
+ * newest until it lands; the frame rate does not move.
  */
 @MainThread
 final class Session implements AutoCloseable {
@@ -47,7 +43,7 @@ final class Session implements AutoCloseable {
     private final Atchung bus;
     private final Kron kron;
     private final Tempo playback;
-    private final Handoff steps;
+    private final Dilated world;
 
     private Scenario scenario;
     private Controls.Solver solver;
@@ -55,23 +51,20 @@ final class Session implements AutoCloseable {
     private int iterations;
     private Ratio speed = Ratio.of(1, 1);
     private boolean paused;
-    private long due;
-    private long told = -1;
-    private boolean toldHeld;
     private long frames;
     private double drawMillis;
 
-    Session(GuiApp app, Ui ui, Controls controls, ShownRing ring, PhysicsNews news, Atchung bus, KronoGui krono) {
+    Session(GuiApp app, Ui ui, Controls controls, ShownRing ring, PhysicsNews news, Atchung bus, Kron kron,
+            Tempo playback, Dilated world) {
         this.app = app;
         this.ui = ui;
         this.controls = controls;
         this.ring = ring;
         this.news = news;
         this.bus = bus;
-        this.kron = krono.kron();
-        this.playback = kron.tempo().child("playback", speed);
-        Rate physics = playback.fixed("physics", Dur.hz(1 / Physics.STEP_SECONDS)).maxCatchUp(4);
-        this.steps = physics.handoff();
+        this.kron = kron;
+        this.playback = playback;
+        this.world = world;
     }
 
     /** One frame, after the clock has ticked. */
@@ -79,21 +72,15 @@ final class Session implements AutoCloseable {
     public void frame() {
         ui.panel().sync();
         settle();
-        due += steps.drain(step -> { });
-        if (due != told || paused != toldHeld) {
-            told = due;
-            toldHeld = paused;
-            bus.publish(Messages.ALLOW_TOPIC, new Allow(due, paused));
-        }
         ShownRing.Frame frame = ring.take();
         if (frame != null) {
             long start = System.nanoTime();
-            ui.view().show(app, frame, frame.alpha(start));
+            ui.view().show(app, frame, world.phase(start));
             double ms = (System.nanoTime() - start) / 1e6;
             drawMillis = drawMillis == 0 ? ms : 0.9 * drawMillis + 0.1 * ms;
         }
         if (frames++ % READ_EVERY == 0) {
-            ui.readings().show(news.latest(), drawMillis, paused);
+            ui.readings().show(news.latest(), world, drawMillis, paused);
         }
     }
 
@@ -107,7 +94,7 @@ final class Session implements AutoCloseable {
         boolean wantedPause = controls.paused();
         if (wantedPause != paused) {
             paused = wantedPause;
-            steps.hold(paused);
+            world.hold(paused);
         }
         Controls.Solver wantedSolver = controls.solver();
         if (wantedSolver != solver && solver != null) {
@@ -131,7 +118,7 @@ final class Session implements AutoCloseable {
     /** The view too: it is drawn here, on the window's device, and must go before the device does. */
     @Override
     public void close() {
-        steps.close();
+        world.close();
         ui.view().close();
     }
 }

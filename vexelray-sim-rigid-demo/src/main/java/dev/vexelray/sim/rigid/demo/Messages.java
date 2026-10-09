@@ -11,12 +11,10 @@ final class Messages {
 
     static final String BUILD = "rigid.build";
     static final String RELAX = "rigid.relax";
-    static final String ALLOW = "rigid.allow";
     static final String NEXT = "rigid.next";
 
     static final Topic<Build> BUILD_TOPIC = Topic.of(BUILD, Build.class);
     static final Topic<Relax> RELAX_TOPIC = Topic.of(RELAX, Relax.class);
-    static final Topic<Allow> ALLOW_TOPIC = Topic.of(ALLOW, Allow.class);
     static final Topic<Next> NEXT_TOPIC = Topic.of(NEXT, Next.class);
 
     private Messages() {
@@ -34,14 +32,9 @@ final class Messages {
     }
 
     /**
-     * The steps the clock has made due since the application started, counted, and whether the world is held. A
-     * sample: the count only grows, so the newest says everything the older did. Physics runs steps back to back
-     * until it has run as many, and never decides for itself that one is due.
+     * Run the next step, if the world's clock says one is due: published by the clock, on the timeline, as a step
+     * comes due, and by physics to itself after a step. One a delivery, so the lane's other mail goes between.
      */
-    record Allow(long due, boolean held) {
-    }
-
-    /** Physics to itself: run the next step, if one is due. One a delivery, so the lane's other mail goes between. */
     record Next() {
     }
 }
