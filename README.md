@@ -28,8 +28,8 @@ Jacobi, every sphere solved at once, cannot rest a stack: a column of twenty sin
 itself and jitters. Gauss–Seidel over a contact list, solved in rounds of contacts that share no sphere, one
 invocation per contact, rests the column with under a millionth of Jacobi's moving energy, and lets a pile settle.
 On a pile of 4096 it costs 1.2 ms a step at 10 substeps, about twice what Jacobi costs for the same overlap. The
-demo offers both, on the grid, and Gauss–Seidel there runs until every contact is solved. There is no rotation, so no
-friction; contacts bounce as much as the restitution asked for.
+demo offers both, on the grid, and Gauss–Seidel there runs until every contact is solved. Spheres carry a spin and an
+orientation, but there is no friction yet to change them; contacts bounce as much as the restitution asked for.
 
 The physics timing in [docs/physics-timing.md](docs/physics-timing.md) is built: every contact solved every step,
 physics on a second Vulkan queue and a thread of its own, finished steps handed to the frame through a ring, and a

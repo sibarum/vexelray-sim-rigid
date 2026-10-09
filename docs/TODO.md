@@ -215,7 +215,17 @@ contacts a step unsolved on the pile of 4096.
       way: Jacobi on the grid does not repeat from run to run (a pile of 343 read 7.9%, 9.4% and 11% overlap on three
       runs), because the sort is not stable and the sums follow its order; every pair and the contact list do.
 - [ ] **Rotation and friction**: an orientation per body, and friction at contacts, so a pile holds a slope and a
-      sphere rolls.
+      sphere rolls. In stages: spin; friction in the Gauss–Seidel contact and the walls, as a positional clamp at
+      `μs d` and `μk d` of the contact's normal correction `d`; the picture and the demo; then the pile's slope
+      measured, with rolling resistance only if it needs it. Jacobi gets no friction until something asks for it.
+  - [x] **Spin** (2026-10-09). A sphere carries an angular velocity `ax, ay, az` and an orientation `qx, qy, qz, qw`,
+        which `predict` turns, to first order and normalised. The constraints' turns go into `tx, ty, tz` as they are
+        computed, and `velocity` adds them as `t / h`, as the moves are added, never read back from two
+        orientations. A solid sphere's inertia, `⅖ m r²`, needs no buffer. Nothing turns a sphere yet. `SpinTest`,
+        both backends and both solves: a spin is kept to the bit, and turns a sphere by π about `(1, 2, 2) / 3` in a
+        second to 2e-4. The sweep is the same to the last digit (Jacobi on the grid aside, which never repeats) and
+        costs the same within run-to-run noise. `SphereDiagnostics` counts spin in the moving energy, and adds the
+        angular momentum about the origin for friction's conservation test.
 - [ ] **Boxes**: orientation, a contact manifold, and stacking measured the way the column is.
 - [ ] **Fixed point against f32**, as the fluid's scatter was measured. The velocity finding above is a reason to
       look: f32 positions already cost something here.

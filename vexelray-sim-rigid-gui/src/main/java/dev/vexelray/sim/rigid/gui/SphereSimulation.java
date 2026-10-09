@@ -233,10 +233,11 @@ public final class SphereSimulation implements AutoCloseable {
         runner.finish();
     }
 
-    /** The state, read back: {@code x, y, z, u, v, w}. */
+    /** The state, read back: {@code x, y, z, u, v, w}, and the angular velocity {@code ax, ay, az}. */
     public float[][] state() {
         return new float[][] {runner.floats("x"), runner.floats("y"), runner.floats("z"), runner.floats("u"),
-                runner.floats("v"), runner.floats("w")};
+                runner.floats("v"), runner.floats("w"), runner.floats("ax"), runner.floats("ay"),
+                runner.floats("az")};
     }
 
     /**

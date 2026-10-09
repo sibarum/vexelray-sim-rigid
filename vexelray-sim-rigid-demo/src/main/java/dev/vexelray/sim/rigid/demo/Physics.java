@@ -163,8 +163,8 @@ final class Physics implements AutoCloseable {
             unlisted += kept.step().solve().unlisted();
             if (steps % READ_EVERY == 0) {
                 float[][] now = sim.state();
-                read = SphereDiagnostics.of(now[0], now[1], now[2], now[3], now[4], now[5], state.r, state.im,
-                        GRAVITY, state.extent[0], state.extent[1], state.extent[2]);
+                read = SphereDiagnostics.of(now[0], now[1], now[2], now[3], now[4], now[5], now[6], now[7], now[8],
+                        state.r, state.im, GRAVITY, state.extent[0], state.extent[1], state.extent[2]);
             }
             report();
             bus.publish(Messages.NEXT_TOPIC, new Next());

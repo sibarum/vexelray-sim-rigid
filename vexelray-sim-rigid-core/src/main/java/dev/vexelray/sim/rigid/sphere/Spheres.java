@@ -107,8 +107,11 @@ import static dev.supirvast.vastir.build.Body.v;
  * <h2>What it is not, yet</h2>
  *
  * <ul>
- *   <li><b>No rotation, so no friction.</b> A sphere is a point with a radius. Frictionless spheres stack in a column
- *       held by walls, and a pile of them slumps flat; both are the technique, not bugs.</li>
+ *   <li><b>No friction, so nothing turns a sphere.</b> A sphere carries an angular velocity {@code ax, ay, az} and an
+ *       orientation {@code qx, qy, qz, qw}, which {@link #predict} turns and to which {@link #velocity} adds the
+ *       constraints' turns {@code tx, ty, tz}; but no constraint turns one yet, so a sphere keeps the spin it was
+ *       given. Frictionless spheres stack in a column held by walls, and a pile of them slumps flat; both are the
+ *       technique, not bugs.</li>
  *   <li><b>Only spheres</b>, which is what makes contact a distance. Boxes need orientation and a contact manifold.</li>
  * </ul>
  *
@@ -176,9 +179,17 @@ public final class Spheres {
     // --- the buffers each pass binds, in order -------------------------------------------------------------
 
     /** Every per-sphere field, in the order {@link SphereStep} holds them. */
-    static final String[] SPHERE = {"x", "y", "z", "u", "v", "w", "r", "im", "cx", "cy", "cz", "dx", "dy", "dz"};
+    static final String[] SPHERE = {"x", "y", "z", "u", "v", "w", "r", "im", "cx", "cy", "cz", "dx", "dy", "dz",
+            "ax", "ay", "az", "tx", "ty", "tz", "qx", "qy", "qz", "qw"};
 
-    static final String[] PREDICT_NAMES = {"x", "y", "z", "u", "v", "w", "im", "params"};
+    /**
+     * A solid sphere's moment of inertia, as a share of {@code m r²}: {@code I = ⅖ m r²}, the same about every axis, so
+     * its inverse is {@code im / (⅖ r²)} and needs no buffer of its own.
+     */
+    public static final double INERTIA = 0.4;
+
+    static final String[] PREDICT_NAMES = {"x", "y", "z", "u", "v", "w", "im", "params", "ax", "ay", "az", "qx", "qy",
+            "qz", "qw"};
     static final List<Buffer> PREDICT_BUFFERS = bind(PREDICT_NAMES);
 
     static final String[] SOLVE_NAMES = {"x", "y", "z", "r", "im", "cx", "cy", "cz", "params"};
@@ -187,18 +198,24 @@ public final class Spheres {
     static final String[] APPLY_NAMES = {"x", "y", "z", "r", "im", "cx", "cy", "cz", "dx", "dy", "dz", "params"};
     static final List<Buffer> APPLY_BUFFERS = bind(APPLY_NAMES);
 
-    static final String[] VELOCITY_NAMES = {"u", "v", "w", "dx", "dy", "dz", "params", "cx", "cy", "cz"};
+    static final String[] VELOCITY_NAMES = {"u", "v", "w", "dx", "dy", "dz", "params", "cx", "cy", "cz", "ax", "ay",
+            "az", "tx", "ty", "tz", "qx", "qy", "qz", "qw"};
     static final List<Buffer> VELOCITY_BUFFERS = bind(VELOCITY_NAMES);
 
     // --- the passes ----------------------------------------------------------------------------------------
 
-    /** One invocation per sphere: gravity into the velocity, and the sphere moved along it. */
+    /**
+     * One invocation per sphere: gravity into the velocity, and the sphere moved along it; and the sphere turned by
+     * its angular velocity. Nothing applies a torque, so the angular velocity is left as it is.
+     */
     public static Function predict() {
         List<Buffer> bs = PREDICT_BUFFERS;
         Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
         Buffer[] velocity = {bs.get(3), bs.get(4), bs.get(5)};
         Buffer im = bs.get(6);
         Buffer params = bs.get(7);
+        Buffer[] spin = {bs.get(8), bs.get(9), bs.get(10)};
+        Buffer[] q = {bs.get(11), bs.get(12), bs.get(13), bs.get(14)};
         int[] gravity = {GX, GY, GZ};
 
         Body b = new Body();
@@ -210,6 +227,11 @@ public final class Spheres {
                 free.store(velocity[a], v(s), v(vel));
                 free.store(at[a], v(s), add(load(at[a], v(s)), mul(v(h), v(vel))));
             }
+            Expr[] angle = new Expr[3];
+            for (int a = 0; a < 3; a++) {
+                angle[a] = mul(v(h), load(spin[a], v(s)));
+            }
+            turn(free, s, q, angle);
         }));
         return function("spheresPredict", b);
     }
@@ -747,6 +769,11 @@ public final class Spheres {
      * One invocation per sphere: what the constraints moved it by this substep, added as a velocity, and cleared. The
      * velocity as it was before, the one the substep predicted with, is kept in {@code cx, cy, cz}, free by now, for
      * {@link #bounce} to read how fast contacts were closing.
+     *
+     * <p>Likewise for turning: what the constraints turned the sphere by, {@code tx, ty, tz} as a rotation vector,
+     * added to the angular velocity as {@code t / h}, the orientation turned by it, and cleared. The turns are added
+     * up as they are computed, for the reason the moves are ({@link Spheres above}), and never read back from two
+     * orientations.
      */
     public static Function velocity() {
         List<Buffer> bs = VELOCITY_BUFFERS;
@@ -754,6 +781,9 @@ public final class Spheres {
         Buffer[] displaced = {bs.get(3), bs.get(4), bs.get(5)};
         Buffer params = bs.get(6);
         Buffer[] before = {bs.get(7), bs.get(8), bs.get(9)};
+        Buffer[] spin = {bs.get(10), bs.get(11), bs.get(12)};
+        Buffer[] turned = {bs.get(13), bs.get(14), bs.get(15)};
+        Buffer[] q = {bs.get(16), bs.get(17), bs.get(18), bs.get(19)};
 
         Body b = new Body();
         LocalVar s = b.let("s", new Expr.InvocationId());
@@ -765,8 +795,49 @@ public final class Spheres {
                 t.store(velocity[a], v(s), add(v(was), mul(load(displaced[a], v(s)), v(perH))));
                 t.store(displaced[a], v(s), f(0));
             }
+            Expr[] angle = new Expr[3];
+            for (int a = 0; a < 3; a++) {
+                LocalVar by = t.let("by", load(turned[a], v(s)));
+                t.store(spin[a], v(s), add(load(spin[a], v(s)), mul(v(by), v(perH))));
+                t.store(turned[a], v(s), f(0));
+                angle[a] = v(by);
+            }
+            turn(t, s, q, angle);
         });
         return function("spheresVelocity", b);
+    }
+
+    /**
+     * Sphere {@code s}'s orientation {@code q}, a unit quaternion {@code (x, y, z, w)}, turned by the small rotation
+     * {@code angle}, a rotation vector in radians: {@code q + ½ (angle, 0) ⊗ q}, normalised. First order, as XPBD
+     * integrates it; a turn of θ comes out as {@code 2 atan(θ / 2)}, short by about {@code θ³ / 12}. A quaternion of
+     * zero, which an orientation never written would be, stays zero rather than becoming a number that is not one.
+     */
+    private static void turn(Body t, LocalVar s, Buffer[] q, Expr[] angle) {
+        LocalVar[] a = new LocalVar[3];
+        for (int k = 0; k < 3; k++) {
+            a[k] = t.let("half", mul(f(0.5f), angle[k]));
+        }
+        LocalVar[] was = new LocalVar[4];
+        for (int k = 0; k < 4; k++) {
+            was[k] = t.let("q", load(q[k], v(s)));
+        }
+        // (a, 0) ⊗ (v, w) = (w a + a × v, −a · v)
+        LocalVar[] now = new LocalVar[4];
+        for (int k = 0; k < 3; k++) {
+            int k1 = (k + 1) % 3;
+            int k2 = (k + 2) % 3;
+            now[k] = t.let("turned", add(v(was[k]), add(mul(v(a[k]), v(was[3])),
+                    sub(mul(v(a[k1]), v(was[k2])), mul(v(a[k2]), v(was[k1]))))));
+        }
+        now[3] = t.let("turned", sub(v(was[3]), add(mul(v(a[0]), v(was[0])),
+                add(mul(v(a[1]), v(was[1])), mul(v(a[2]), v(was[2]))))));
+        LocalVar len2 = t.let("len2", add(add(mul(v(now[0]), v(now[0])), mul(v(now[1]), v(now[1]))),
+                add(mul(v(now[2]), v(now[2])), mul(v(now[3]), v(now[3])))));
+        LocalVar inverse = t.let("inverse", div(f(1), sqrt(max(v(len2), f(1e-30f)))));
+        for (int k = 0; k < 4; k++) {
+            t.store(q[k], v(s), mul(v(now[k]), v(inverse)));
+        }
     }
 
     static final String[] BOUNCE_NAMES = {"x", "y", "z", "r", "im", "u", "v", "w", "cx", "cy", "cz", "dx", "dy", "dz",

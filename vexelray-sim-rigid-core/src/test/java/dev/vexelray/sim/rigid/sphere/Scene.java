@@ -23,6 +23,10 @@ final class Scene implements AutoCloseable {
     final float[] u;
     final float[] v;
     final float[] w;
+    /** The angular velocity, in radians a second. */
+    final float[] ax;
+    final float[] ay;
+    final float[] az;
     final float[] r;
     final float[] im;
 
@@ -71,6 +75,9 @@ final class Scene implements AutoCloseable {
         u = new float[n];
         v = new float[n];
         w = new float[n];
+        ax = new float[n];
+        ay = new float[n];
+        az = new float[n];
         r = new float[n];
         im = new float[n];
         java.util.Arrays.fill(im, 1);
@@ -118,6 +125,9 @@ final class Scene implements AutoCloseable {
         runner.write("u", u);
         runner.write("v", v);
         runner.write("w", w);
+        runner.write("ax", ax);
+        runner.write("ay", ay);
+        runner.write("az", az);
         runner.write("r", r);
         runner.write("im", im);
         return this;
@@ -163,9 +173,18 @@ final class Scene implements AutoCloseable {
         copy(runner.floats("u"), u);
         copy(runner.floats("v"), v);
         copy(runner.floats("w"), w);
+        copy(runner.floats("ax"), ax);
+        copy(runner.floats("ay"), ay);
+        copy(runner.floats("az"), az);
         return this;
     }
 
+
+    /** Sphere {@code s}'s orientation as it is on the backend now, {@code (x, y, z, w)}. */
+    float[] orientation(int s) {
+        return new float[] {runner.floats("qx")[s], runner.floats("qy")[s], runner.floats("qz")[s],
+                runner.floats("qw")[s]};
+    }
 
     /** The contact list's counts ({@link Spheres#CONTACT_COUNT_WORDS}), or null where the solve keeps no list. */
     int[] contactCount() {
@@ -173,7 +192,7 @@ final class Scene implements AutoCloseable {
     }
     SphereDiagnostics diagnostics() {
         read();
-        return SphereDiagnostics.of(x, y, z, u, v, w, r, im, gy, sx, sy, sz);
+        return SphereDiagnostics.of(x, y, z, u, v, w, ax, ay, az, r, im, gy, sx, sy, sz);
     }
 
     private static void copy(float[] from, float[] to) {

@@ -18,8 +18,10 @@ import java.util.Map;
  *
  * <p>A sphere carries {@code x, y, z}, the velocity {@code u, v, w}, its radius {@code r} and inverse mass
  * {@code im}; {@code cx, cy, cz} are the Jacobi solve's scratch, and {@code dx, dy, dz} the substep's constraint
- * moves, zero between substeps. {@code shown} is for a picture, {@link Spheres#SHOWN_STRIDE} floats a sphere. The
- * parameters' {@code h} is the substep, so a step advances {@code substeps · h} seconds.
+ * moves, zero between substeps. {@code ax, ay, az} is its angular velocity, in radians a second, {@code qx, qy, qz,
+ * qw} its orientation, and {@code tx, ty, tz} the substep's constraint turns, zero between substeps. {@code shown} is
+ * for a picture, {@link Spheres#SHOWN_STRIDE} floats a sphere. The parameters' {@code h} is the substep, so a step
+ * advances {@code substeps · h} seconds.
  *
  * <p>With a {@link SphereGrid}, every substep sorts the spheres into its cells after they are predicted, by
  * SupirVast's {@link CountingSort}, and the solve tests only neighbouring cells. The spheres themselves stay where
@@ -135,6 +137,9 @@ public final class SphereStep implements Buffered {
         for (String field : Spheres.SPHERE) {
             buffers.put(field, new BufferSpec(field, Body.F32, spheres));
         }
+        int[] identity = new int[spheres];
+        java.util.Arrays.fill(identity, Float.floatToRawIntBits(1));
+        constants.put("qw", identity);
         buffers.put("params", new BufferSpec("params", Body.F32, Spheres.PARAM_COUNT));
         buffers.put("shown", new BufferSpec("shown", Body.F32, Spheres.SHOWN_STRIDE * spheres));
 
@@ -357,7 +362,10 @@ public final class SphereStep implements Buffered {
         return buffers;
     }
 
-    /** What to write into which buffers once, after they are cleared and before the first step. */
+    /**
+     * What to write into which buffers once, after they are cleared and before the first step: among them every
+     * orientation as the identity, which a host that wants others writes after.
+     */
     public Map<String, int[]> constants() {
         return constants;
     }
