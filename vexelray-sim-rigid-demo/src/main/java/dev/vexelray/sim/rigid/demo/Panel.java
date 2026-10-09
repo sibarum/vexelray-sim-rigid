@@ -10,6 +10,7 @@ import dev.vexelray.gui.widget.Inspector;
 import dev.vexelray.sim.core.gui.DemoLook;
 import dev.vexelray.sim.core.gui.Pick;
 import dev.vexelray.sim.rigid.demo.Controls.Solver;
+import dev.vexelray.sim.rigid.gui.SphereRunner;
 
 import java.util.List;
 
@@ -48,7 +49,9 @@ final class Panel {
                 new Pick<>("Solver", "Iterations", Controls.ITERATIONS, String::valueOf, controls::iterations,
                         controls::iterations),
                 new Pick<>("Playback", "Speed", Controls.SPEEDS, Controls::speedLabel, controls::speed,
-                        controls::speed));
+                        controls::speed),
+                new Pick<>("Physics", "Runs on", List.of(SphereRunner.Backend.values()), b -> b.label,
+                        controls::backend, controls::backend));
 
         Node heading = gui.text("Readings").font(DemoLook.UI).textSize(DemoLook.HEADING)
                 .textColor(gui.theme().color(Role.INK));

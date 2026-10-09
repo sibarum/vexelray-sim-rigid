@@ -1,5 +1,6 @@
 package dev.vexelray.sim.rigid.demo;
 
+import dev.vexelray.sim.rigid.gui.SphereRunner;
 import sibarum.kronometer.Ratio;
 
 import java.util.List;
@@ -42,6 +43,7 @@ final class Controls {
     private Solver solver = Solver.AVERAGED;
     private int substeps = 10;
     private int iterations = 1;
+    private SphereRunner.Backend backend = SphereRunner.Backend.QUEUE;
     private Ratio speed = Ratio.of(1, 1);
     private boolean paused;
     private boolean reset;
@@ -88,6 +90,15 @@ final class Controls {
 
     synchronized void iterations(int n) {
         iterations = n;
+        version++;
+    }
+
+    synchronized SphereRunner.Backend backend() {
+        return backend;
+    }
+
+    synchronized void backend(SphereRunner.Backend b) {
+        backend = b;
         version++;
     }
 

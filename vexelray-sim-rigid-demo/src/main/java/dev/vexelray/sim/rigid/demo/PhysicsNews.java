@@ -21,14 +21,17 @@ final class PhysicsNews {
      * @param simulated  seconds of world time run since the scenario started, counted by its finished steps
      * @param state      the readings of the state, as of the last time they were read back; null before then
      * @param stepMillis a step's wall time on the physics thread, averaged
-     * @param gpuMillis  a step's time on the GPU, averaged
+     * @param gpuMillis  a step's time on the GPU, averaged; zero on the CPU
+     * @param handBackMillis from a step being done to its being in the picture's ring, averaged
+     * @param where      where the simulation runs
      * @param problem    why there is no physics, or an empty string
      */
     record Report(Scenario scenario, boolean building, int spheres, int substeps, int iterations, double simulated,
-                  SphereDiagnostics state, double stepMillis, double gpuMillis, String problem) {
+                  SphereDiagnostics state, double stepMillis, double gpuMillis, double handBackMillis,
+                  String where, String problem) {
 
         static Report waiting(Scenario scenario) {
-            return new Report(scenario, true, 0, 0, 0, 0, null, 0, 0, "");
+            return new Report(scenario, true, 0, 0, 0, 0, null, 0, 0, 0, "", "");
         }
     }
 

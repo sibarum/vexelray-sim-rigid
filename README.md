@@ -30,11 +30,11 @@ invocation per contact, rests the column with under a millionth of Jacobi's movi
 On a pile of 4096 it costs 1.2 ms a step at 10 substeps, about twice what Jacobi costs for the same overlap. The
 demo runs Jacobi on the grid. There is no rotation, so no friction, and no restitution.
 
-The physics timing in [docs/physics-timing.md](docs/physics-timing.md) is five stages in: every contact solved every
-step, physics on a second Vulkan queue and a thread of its own, finished steps handed to the frame through a ring,
-and a world clock counted by the steps that finish. When steps get slow the world slows and says by how much, and
-the frame rate does not move. Next is measuring the backends: the integrated GPU and the CPU against the second
-queue. [docs/TODO.md](docs/TODO.md) has the numbers and the rest of the list.
+The physics timing in [docs/physics-timing.md](docs/physics-timing.md) is built: every contact solved every step,
+physics on a second Vulkan queue and a thread of its own, finished steps handed to the frame through a ring, and a
+world clock counted by the steps that finish. When steps get slow the world slows and says by how much, and the
+frame rate does not move. Physics runs on this GPU's own queue, the integrated GPU or the CPU, and a profile measures
+each against the frame. [docs/TODO.md](docs/TODO.md) has the numbers and the rest of the list.
 
 ## Running
 
@@ -48,7 +48,8 @@ mvn install
 Runs the tests that take seconds; add `-Dsupirvast.requireGpu=true` to fail rather than skip where there is no GPU.
 Tests that run seconds of simulated time and judge what the bodies did run only with `-Pphysics`. The sweep that
 measures the solvers is not an assertion, and runs only with `-Drigid.sweep=true` (on the GPU, or on the CPU with
-`-Drigid.backend=CPU`).
+`-Drigid.backend=CPU`). The profile of the backends against the frame, `BackendProfileTest`, runs only with
+`-Drigid.profile=true`, and takes a couple of minutes.
 
 ```bash
 mvn -pl vexelray-sim-rigid-demo exec:exec

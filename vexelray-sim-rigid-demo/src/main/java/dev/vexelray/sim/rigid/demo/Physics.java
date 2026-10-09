@@ -10,18 +10,17 @@ import dev.vexelray.sim.rigid.demo.Messages.Build;
 import dev.vexelray.sim.rigid.demo.Messages.Next;
 import dev.vexelray.sim.rigid.demo.Messages.Relax;
 import dev.vexelray.sim.rigid.gui.ShownRing;
+import dev.vexelray.sim.rigid.gui.SphereRunner;
 import dev.vexelray.sim.rigid.gui.SphereSimulation;
 import dev.vexelray.sim.rigid.sphere.SphereDiagnostics;
+import dev.vexelray.sim.rigid.sphere.SphereStep;
 import dev.vexelray.sim.rigid.sphere.Spheres;
 import sibarum.atchung.Atchung;
 import sibarum.kronometer.Dilated;
 
-import java.util.HashMap;
-import java.util.Map;
-
 /**
- * The physics, on a lane of its own: it makes the simulation, runs its steps back to back on the compute queue the
- * application lent it, and keeps each finished step in the {@link ShownRing} for the frame to draw.
+ * The physics, on a lane of its own: it makes the simulation, on whichever backend the user chose, runs its steps back
+ * to back, and keeps each finished step in the {@link ShownRing} for the frame to draw ({@link SphereRunner}).
  *
  * <h2>The frame never waits for it</h2>
  *
@@ -37,11 +36,11 @@ import java.util.Map;
  * grid, the clock forgives what is owed past {@link #MOST_BEHIND} rather than have it run in a burst: the world
  * slows, which is the dilation the timing plan asks for.
  *
- * <h2>Generations</h2>
+ * <h2>Backends</h2>
  *
- * A new simulation, of another scenario or shape, is made here, which takes a good part of a second while the world
- * waits. It brings its own ring buffers; the old simulation is closed only once the frame has moved past its buffers,
- * which the ring says.
+ * The compute queue the application lent is where every ring lives, because it is on the device the picture is drawn
+ * on. A simulation runs there too, or on the integrated GPU, or on the CPU; from those, each step comes to the ring
+ * through the host, and what that costs is a reading.
  */
 @Component(lane = "physics")
 final class Physics implements AutoCloseable {
@@ -57,47 +56,46 @@ final class Physics implements AutoCloseable {
     /** The state is read back for the readings every this many steps: a readback is a wait, and they need not be live. */
     private static final int READ_EVERY = 10;
 
-    private final ShownRing ring;
     private final PhysicsNews news;
     private final Atchung bus;
     private final Dilated world;
     private final GpuContext context;
-    private final String problem;
+    private final SphereRunner runner;
+    private final String noQueue;
 
-    /** Every simulation not yet closed, by its ring generation, the running one included. */
-    private final Map<Long, SphereSimulation> sims = new HashMap<>();
     private SphereSimulation sim;
     private Scenario.State state;
     private Scenario scenario = Scenario.COLUMN;
-    private long generation;
-    private long kept;
+    private long steps;
+    private String problem = "";
 
     private double omega = 1;
     private boolean averaged = true;
     private double simulated;
     private double stepMillis;
     private double gpuMillis;
+    private double handBackMillis;
     private SphereDiagnostics read;
 
     Physics(ComputeQueue queue, ShownRing ring, PhysicsNews news, Atchung bus, Dilated world) {
-        this.ring = ring;
         this.news = news;
         this.bus = bus;
         this.world = world;
         // On the timeline, as a step comes due: a sample, so a burst of them is one wake.
         world.onDue(() -> bus.publish(Messages.NEXT_TOPIC, new Next()));
         this.context = AppCompute.on(queue).orElse(null);
-        this.problem = context == null
+        this.runner = context == null ? null : new SphereRunner(context, ring);
+        this.noQueue = context == null
                 ? "No compute queue of its own (" + queue.why() + "), so there is no physics to draw." : "";
         if (context == null) {
-            news.report(new PhysicsNews.Report(scenario, false, 0, 0, 0, 0, null, 0, 0, problem));
+            news.report(new PhysicsNews.Report(scenario, false, 0, 0, 0, 0, null, 0, 0, 0, "", noQueue));
         }
     }
 
-    /** A simulation of a new shape, made here; the world waits while it is. */
+    /** A simulation of a new shape, or on another backend, made here; the world waits while it is. */
     @Subscribe(topic = Messages.BUILD, capacity = 8)
     public void build(Build b) {
-        if (context == null) {
+        if (runner == null) {
             return;
         }
         boolean carry = b.carry() && sim != null && b.scenario() == scenario;
@@ -106,24 +104,27 @@ final class Physics implements AutoCloseable {
         omega = b.omega();
         averaged = b.averaged();
         news.report(PhysicsNews.Report.waiting(scenario));
-        SphereSimulation made = new SphereSimulation(context, from.n, b.substeps(), b.iterations(), from.grid());
-        made.start(from.x, from.y, from.z, from.u, from.v, from.w, from.r, from.im, params(made.substeps(), from));
-        sim = made;
+        SphereStep step = new SphereStep(from.n, b.substeps(), b.iterations(), from.grid());
+        SphereRunner.Backend backend = b.backend();
+        try {
+            sim = runner.install(step, backend, from.extent, s -> s.start(from.x, from.y, from.z, from.u, from.v,
+                    from.w, from.r, from.im, params(b.substeps(), from)));
+            problem = "";
+        } catch (IllegalStateException none) {
+            // No such device here: say so, and run where the picture is instead.
+            problem = backend.label + " is not here (" + none.getMessage() + "), so this runs on this GPU.";
+            sim = runner.install(step, SphereRunner.Backend.QUEUE, from.extent, s -> s.start(from.x, from.y,
+                    from.z, from.u, from.v, from.w, from.r, from.im, params(b.substeps(), from)));
+        }
         state = from;
         if (!carry) {
             simulated = 0;
         }
         read = null;
-        // The start, kept as the generation's first step, so the frame has a picture before the first step is run.
-        generation++;
-        kept = 1;
-        made.keep(0, kept).await();
-        sims.put(generation, made);
-        ring.install(made.generation(generation, from.extent));
-        ring.publish(kept, System.nanoTime());
+        stepMillis = gpuMillis = handBackMillis = 0;
         world.discard();                // the steps owed while it was made are not this one's to run
         report();
-        bus.publish(Messages.NEXT_TOPIC, new Next());
+        step(new Next());
     }
 
     @Subscribe(topic = Messages.RELAX, overflow = Overflow.COALESCE_LATEST)
@@ -135,41 +136,37 @@ final class Physics implements AutoCloseable {
         }
     }
 
-    /** One step, if the world's clock says one is due, and the next asked for in case there is another. */
+    /**
+     * One step, if the world's clock says one is due, and the next asked for in case another is: one a delivery, so the
+     * lane's other mail, a new build say, is read between them.
+     */
     @Subscribe(topic = Messages.NEXT, overflow = Overflow.COALESCE_LATEST)
     public void step(Next n) {
-        if (sim == null || !world.take()) {
-            return;
-        }
-        SphereSimulation.StepReport report = sim.stepAndWait();
-        kept++;
-        sim.keep(ring.back(), kept).await();
-        long done = System.nanoTime();
-        ring.publish(kept, done);
-        world.finished(done);
-        simulated += STEP_SECONDS;
-        double wall = report.wallNanos() / 1e6;
-        double gpu = report.gpuNanos() / 1e6;
-        stepMillis = stepMillis == 0 ? wall : 0.9 * stepMillis + 0.1 * wall;
-        gpuMillis = gpuMillis == 0 ? gpu : 0.9 * gpuMillis + 0.1 * gpu;
-        for (ShownRing.Generation old : ring.retired()) {
-            SphereSimulation finished = sims.remove(old.id());
-            if (finished != null) {
-                finished.close();
+        if (sim != null && world.take()) {
+            SphereRunner.Kept kept = runner.step();
+            world.finished(kept.finishedNanos());
+            steps++;
+            simulated += STEP_SECONDS;
+            stepMillis = average(stepMillis, kept.step().wallNanos() / 1e6);
+            gpuMillis = average(gpuMillis, kept.step().gpuNanos() / 1e6);
+            handBackMillis = average(handBackMillis, kept.handBackNanos() / 1e6);
+            if (steps % READ_EVERY == 0) {
+                float[][] now = sim.state();
+                read = SphereDiagnostics.of(now[0], now[1], now[2], now[3], now[4], now[5], state.r, state.im,
+                        GRAVITY, state.extent[0], state.extent[1], state.extent[2]);
             }
+            report();
+            bus.publish(Messages.NEXT_TOPIC, new Next());
         }
-        if (kept % READ_EVERY == 0) {
-            float[][] now = sim.state();
-            read = SphereDiagnostics.of(now[0], now[1], now[2], now[3], now[4], now[5], state.r, state.im, GRAVITY,
-                    state.extent[0], state.extent[1], state.extent[2]);
-        }
-        report();
-        bus.publish(Messages.NEXT_TOPIC, new Next());
+    }
+
+    private static double average(double was, double now) {
+        return was == 0 ? now : 0.9 * was + 0.1 * now;
     }
 
     private void report() {
         news.report(new PhysicsNews.Report(scenario, false, sim.spheres(), sim.substeps(), sim.iterations(),
-                simulated, read, stepMillis, gpuMillis, problem));
+                simulated, read, stepMillis, gpuMillis, handBackMillis, sim.where(), problem));
     }
 
     /** The running simulation's state now, as a start for one of another shape. */
@@ -195,10 +192,9 @@ final class Physics implements AutoCloseable {
     /** After the lane has stopped: every simulation, then the context. The application closes the device after. */
     @Override
     public void close() {
-        for (SphereSimulation s : sims.values()) {
-            s.close();
+        if (runner != null) {
+            runner.close();
         }
-        sims.clear();
         if (context != null) {
             context.close();
         }

@@ -41,6 +41,12 @@
             <groupId>dev.vexelray</groupId>
             <artifactId>vexelray-vulkan</artifactId>
         </dependency>
+        <!-- The world's clock, Dilated, for the profile that runs physics as the demo does. -->
+        <dependency>
+            <groupId>sibarum.kronometer</groupId>
+            <artifactId>kronometer-core</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- A real application on a real device, whose lent compute queue a test steps on from a thread of its own. -->
         <dependency>
             <groupId>dev.vexelray.gui</groupId>

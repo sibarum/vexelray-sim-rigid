@@ -194,12 +194,13 @@ contacts a step unsolved on the pile of 4096.
 
 ## Next
 
-- [ ] **Physics timing: a fixed step, a variable rate, and time that dilates.** Every step solves every contact,
-      however long that takes. The game slows rather than solve less, and the frame never waits. That needs a
-      second Vulkan queue, a physics worker thread, a ring of finished states, and a clock that counts steps. The
-      plan, in six stages across SupirVast, vexelray-gui, Kronometer and this repo, is
-      [physics-timing.md](physics-timing.md). It replaces capping Gauss–Seidel's rounds: rounds run until the list
-      is done.
+- [x] **Physics timing: a fixed step, a variable rate, and time that dilates** (2026-10-08). Every step solves
+      every contact; physics runs on a compute queue of its own, from a component on a lane of its own; finished
+      steps reach the frame through a ring, and the frame never waits for one; the world's time is counted by the
+      steps that finish, and slows when they are slow. Six stages across SupirVast, vexelray-gui,
+      vexelray-framework, Kronometer and this repo, each recorded with its measurements in
+      [physics-timing.md](physics-timing.md). Left from it: a slice size of 32 as the default, a hard ceiling on a
+      runaway step, Gauss–Seidel and another machine in the profile, and the hitch at a rebuild.
 - [ ] **The demo offers the solve**, Jacobi or Gauss–Seidel over the list, so a column can be watched coming to
       rest; and the by-cell solve is deleted.
 - [ ] **Restitution**, as a velocity pass after the position solve, measured on a bounce's height.

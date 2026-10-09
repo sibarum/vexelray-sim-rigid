@@ -1,7 +1,8 @@
 # Physics timing: a fixed step, a variable rate, and time that dilates
 
-A plan, not yet built. It spans SupirVast, vexelray-gui, Kronometer and this repo. Each stage is to be built far
-enough to be measured, as everything else here is, and the plan is to be revised by what the measurements say.
+Built, all six stages, on 2026-10-08. It spans SupirVast, vexelray, vexelray-gui, vexelray-framework, Kronometer and
+this repo. Each stage was built far enough to be measured, and each records what it found under its own heading;
+where the measurements changed the plan, the stage says how.
 
 ## What it is for
 
@@ -286,6 +287,70 @@ Not yet:
   - What slice size keeps frame time flat on a shared GPU?
   - Is the integrated GPU, with its copy across devices, faster or slower than the discrete GPU's second queue?
   - Where does Truffle stop being competitive, by sphere count?
+
+**Built and measured** (SupirVast, vexelray-gui, and this repo).
+
+- **`SphereRunner`** is the stepping thread's side of a picture. It runs a simulation on a backend, keeps each step in
+  the ring on the picture's device, and frees each simulation once the picture has moved past it. The backends:
+  - `QUEUE`: the picture's own device, on its compute queue.
+  - `INTEGRATED`: the integrated GPU, a `GpuContext` of its own.
+  - `CPU`: Truffle, via `SphereSimulation.onCpu`.
+- **`ShownSlots`** holds the ring's buffers on the picture's device.
+  - Beside a simulation on the same GPU, a step is kept by a copy there.
+  - From anywhere else, `shown` is read to the host, written to the picture's device, then copied into the slot.
+  - Either way the copy signals the timeline, so the picture's wait is the same.
+- **SupirVast's CPU runner** now lowers one kernel per function rather than per pass, as the GPU runner has compiled
+  one since stage 3.
+- **In the demo**, the panel's "Runs on" control switches the backend live, carrying the state over. Each switch is
+  a new generation in the ring. The readings say where a step ran and what handing it to the picture cost.
+- **`BackendProfileTest`** (`-Drigid.profile=true`) is the harness.
+  - A real application, on `HarnessApp` with a per-frame hook, draws the ring every frame.
+  - Physics runs on its own thread under the world's `Dilated` clock, as the demo runs it.
+  - Each case is warmed for 1.5 s, then measured for 4 s.
+  - The solver is the demo's: Jacobi on the grid, 10 substeps, unless marked heavy (40 × 5).
+
+**Measured**, on the laptop: an RTX 5070 Ti presenting at 144 Hz, and Intel graphics. Times are a step's averages.
+Frame times are intervals between frames while the case ran.
+
+| Backend | Spheres | Step ms | GPU ms | Hand-back ms | Frames, p50 / p99 / max ms | World speed |
+| --- | --- | --- | --- | --- | --- | --- |
+| Picture only | 1000 | — | — | — | 6.95 / 7.48 / 7.9 | — |
+| Own queue | 343 | 0.49 | 0.25 | 0.16 | 6.95 / 9.85 / 10.5 | 100% |
+| Own queue | 1000 | 0.45 | 0.28 | 0.15 | 6.95 / 11.7 / 20.0 | 100% |
+| Own queue | 4096 | 0.42 | 0.28 | 0.11 | 6.95 / 7.22 / 8.9 | 100% |
+| Own queue, sliced 8 | 4096 | 0.59 | 0.40 | 0.09 | 6.94 / 7.24 / 7.4 | 100% |
+| Integrated GPU | 343 | 2.16 | 1.67 | 2.23 | 6.94 / 9.58 / 9.7 | 100% |
+| Integrated GPU | 1000 | 2.28 | 1.79 | 2.29 | 6.94 / 10.1 / 11.1 | 100% |
+| Integrated GPU | 4096 | 3.45 | 2.98 | 2.34 | 6.94 / 7.18 / 7.2 | 100% |
+| CPU | 125 | 11.6 | — | 0.96 | 6.94 / 7.48 / 9.1 | 100% |
+| CPU | 343 | 32.0 | — | 1.64 | 6.95 / 9.58 / 10.1 | 50% |
+| CPU | 1000 | 88.6 | — | 2.07 | 6.94 / 11.6 / 20.0 | 18% |
+| Heavy, own queue | 4096 | 8.44 | 8.27 | 0.12 | 6.98 / 7.25 / 20.8 | 100% |
+| Heavy, sliced 32 | 4096 | 8.57 | 8.22 | 0.10 | 6.97 / 7.25 / 7.5 | 100% |
+| Heavy, sliced 8 | 4096 | 13.8 | 10.6 | 0.11 | 6.95 / 7.36 / 7.9 | 100% |
+| Heavy, integrated | 4096 | 13.3 | 13.0 | 0.95 | 6.94 / 7.19 / 7.3 | 100% |
+
+The answers, as far as one machine and one run each go:
+
+- **A second queue keeps the frame rate.** Physics never moved the median frame off the display's 6.94 ms, on any
+  backend. That includes a heavy step that takes 8.3 ms of GPU time, half of every 60 Hz interval. Its p99 was
+  7.25 ms. The longest frames, 20 ms once in four seconds, are as likely the machine as the physics: the picture alone
+  had none, but light cases had them as often as heavy ones.
+- **Slicing at 32 dispatches is free, and at 8 it is not.** Sliced at 32, the heavy step cost the same and its one
+  20 ms frame did not recur. Sliced at 8, it cost 60% more, from the submissions. A sensible default is 32. A
+  physics load that crowds the frame on this GPU has not been found, so it is a guard rather than a cure.
+- **The integrated GPU is slower here, and still real time.** Its steps take 4 to 7 times as long as the RTX's own
+  queue. The hand-back through the host adds 1 to 2.3 ms, and the RTX's own copy is 0.1 to 0.2 ms. It is the backend
+  for a machine without a compute queue to lend, not a way to go faster on this one.
+- **Truffle keeps real time up to about 200 spheres.** 125 spheres take 11.6 ms a step; 343 take 32 ms, and the
+  world runs at half speed. Its scaling is roughly linear in spheres, so the line is near 180.
+
+Not yet:
+
+- **Other solvers and machines.** Only the demo's Jacobi solve on the grid is profiled, not Gauss–Seidel run until
+  done, and only on this laptop. Each is a case to add.
+- **The first frames after a build.** The hitch seen in stages 4 and 5 is still unexplained. The harness does not
+  measure a build, which is where it happens.
 
 ## Risks, and what would change the plan
 

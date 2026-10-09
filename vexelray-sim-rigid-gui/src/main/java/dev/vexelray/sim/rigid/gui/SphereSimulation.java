@@ -30,7 +30,7 @@ import java.util.Map;
  * kernel lowered, validated and compiled) and may run on any thread; everything after is the owning thread's.
  *
  * <p>On a context lent from the application's device ({@code AppCompute.lend}, or {@code AppCompute.on} a lent
- * compute queue), the buffers are ones the window can draw from, and {@link #shownBuffer} is what a picture binds.
+ * compute queue), the buffers are ones the window can draw from, and a picture is handed its steps by {@link ShownSlots}.
  * Without one, it runs on a device of its own.
  */
 public final class SphereSimulation implements AutoCloseable {
@@ -61,12 +61,6 @@ public final class SphereSimulation implements AutoCloseable {
     private long gpuNanos;
     private final List<Completion> unread = new ArrayList<>();
 
-    // The ring a finished step is kept in for a picture ({@link #keep}); null until the first keep makes it.
-    private ResidentBuffer[] slots;
-    private DispatchSequence[] keeps;
-    private KernelHandle keeper;
-    private GpuContext.Timeline timeline;
-
     /**
      * Jacobi over {@code grid}, or every pair without one: what the demo has run from the start.
      *
@@ -79,9 +73,22 @@ public final class SphereSimulation implements AutoCloseable {
 
     /** {@code step}, whatever it solves with, on {@code context}, or on a device of its own if that is null. */
     public SphereSimulation(GpuContext context, SphereStep step) {
-        this.accelerator = context == null ? new Accelerator() : Accelerator.on(context);
+        this(context == null ? new Accelerator() : Accelerator.on(context), step);
+    }
+
+    /**
+     * {@code step} on the CPU, through Truffle: the same passes, lowered for the host rather than the GPU. Its
+     * state is arrays, so a picture is handed it through the host ({@link ShownSlots#on}).
+     */
+    public static SphereSimulation onCpu(SphereStep step) {
+        return new SphereSimulation((Accelerator) null, step);
+    }
+
+    private SphereSimulation(Accelerator accelerator, SphereStep step) {
+        this.accelerator = accelerator;
         this.step = step;
-        this.runner = PassRunner.gpu(accelerator, step, Spheres.WORKGROUP, PassRunner.NO_SUBGROUP);
+        this.runner = accelerator == null ? PassRunner.cpu(step, Spheres.WORKGROUP, PassRunner.NO_SUBGROUP)
+                : PassRunner.gpu(accelerator, step, Spheres.WORKGROUP, PassRunner.NO_SUBGROUP);
         this.stepper = new SphereStepper(step);
         runner.prepare(step.step());
         if (step.untilDone()) {
@@ -233,68 +240,33 @@ public final class SphereSimulation implements AutoCloseable {
     }
 
     /**
-     * Keeps the last step's {@code shown} in slot {@code slot} of this simulation's ring ({@link ShownRing}) and
-     * sets its timeline to {@code value} once that is done, on the GPU, after everything submitted before. The ring is
-     * made by the first call: {@link ShownRing#SLOTS} buffers, and a timeline that starts at zero.
-     *
-     * @return the copy's completion: the step is the picture's to take once it is done
+     * The last step's {@code shown}, read back to the host: what a picture on another device is handed, through
+     * {@link ShownSlots}. On the CPU, a copy of the array; on a GPU, a staged read that waits for the step.
      */
-    public Completion keep(int slot, long value) {
-        if (slots == null) {
-            slots = new ResidentBuffer[ShownRing.SLOTS];
-            keeps = new DispatchSequence[ShownRing.SLOTS];
-            int words = Spheres.SHOWN_STRIDE * step.spheres;
-            keeper = accelerator.register(new KernelSpec(Spheres.keep(), List.of(
-                    KernelColumn.output("shown", 0, Spheres.KEEP_BUFFERS.get(0).element()).withLength(words),
-                    KernelColumn.output("slot", 1, Spheres.KEEP_BUFFERS.get(1).element()).withLength(words)))
-                    .withWorkgroupSize(Spheres.WORKGROUP)).orElseThrow();
-            timeline = accelerator.timeline(0);
-            for (int k = 0; k < slots.length; k++) {
-                slots[k] = accelerator.allocate(dev.supirvast.vastir.build.Body.F32, words);
-                keeps[k] = accelerator.sequence().dispatch(keeper, List.of(runner.resident("shown"), slots[k]), words)
-                        .build();
-            }
-        }
-        return keeps[slot].run(List.of(), List.of(timeline.at(value)));
+    public int[] readShown() {
+        return runner.read("shown");
     }
 
-    /**
-     * This simulation's ring, as a picture binds it: the slots' buffers and the timeline, once {@link #keep} has made
-     * them. The buffers and the timeline are this simulation's, freed by {@link #close}.
-     *
-     * @param id     the generation's number, which the ring counts
-     * @param extent the box, {@code sx, sy, sz}, in metres
-     */
-    public ShownRing.Generation generation(long id, double[] extent) {
-        if (slots == null) {
-            throw new IllegalStateException("no step has been kept yet, so there is no ring");
-        }
-        long[] handles = new long[slots.length];
-        for (int k = 0; k < slots.length; k++) {
-            handles[k] = slots[k].vkBuffer();
-        }
-        return new ShownRing.Generation(id, handles, timeline.handle(), step.spheres, extent);
+    /** Where this simulation runs, for whoever reports it: the device's name, or the CPU. */
+    public String where() {
+        return accelerator == null ? "the CPU (Truffle)" : accelerator.capabilities().deviceName();
     }
 
-    /** The Vulkan buffer a picture binds: {@link Spheres#SHOWN_STRIDE} floats a sphere. */
-    public long shownBuffer() {
-        return runner.resident("shown").vkBuffer();
+    /** The resident {@code shown}, for {@link ShownSlots} to copy from on the same device; null on the CPU. */
+    ResidentBuffer shown() {
+        return runner.onDevice() ? runner.resident("shown") : null;
+    }
+
+    /** The accelerator the simulation runs on; null on the CPU. */
+    Accelerator accelerator() {
+        return accelerator;
     }
 
     @Override
     public void close() {
-        if (keeps != null) {
-            runner.finish();
-            for (DispatchSequence keep : keeps) {
-                keep.close();
-            }
-            for (ResidentBuffer slot : slots) {
-                slot.close();
-            }
-            accelerator.release(keeper);
-            timeline.close();
-        }
         runner.close();
-        accelerator.close();
+        if (accelerator != null) {
+            accelerator.close();
+        }
     }
 }

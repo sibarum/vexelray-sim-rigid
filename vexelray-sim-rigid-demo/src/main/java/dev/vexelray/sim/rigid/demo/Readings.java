@@ -71,8 +71,8 @@ final class Readings {
             set(Line.ENERGY, String.format("Moving energy     %.2e J", r.state().kinetic()));
             set(Line.SPEED, String.format("Fastest sphere    %.3f m/s", r.state().maxSpeed()));
         }
-        set(Line.COST, String.format("A step %.2f ms (%.2f on the GPU) · the picture %.2f ms", r.stepMillis(),
-                r.gpuMillis(), drawMillis));
+        set(Line.COST, String.format("A step %.2f ms (%.2f on the GPU) on %s · to the picture %.2f ms · the picture"
+                + " %.2f ms", r.stepMillis(), r.gpuMillis(), r.where(), r.handBackMillis(), drawMillis));
     }
 
     private void set(Line line, String text) {
