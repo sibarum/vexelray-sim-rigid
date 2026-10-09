@@ -33,6 +33,19 @@ enum Scenario {
         }
     },
 
+    BALLS("Bouncing balls", "Twelve balls dropped from different heights. Each rises to e² of its fall; at no"
+            + " restitution they land and stay.") {
+        @Override
+        State start() {
+            int n = 12;
+            State s = new State(n, 1.2, 2.5, 0.4);
+            for (int k = 0; k < n; k++) {
+                s.place(k, 0.07 + 0.096 * k, 0.4 + 0.15 * k, 0.2, 0.04, 0.2);
+            }
+            return s;
+        }
+    },
+
     BIG_PILE("Pile of 1000", "The same, three times as many. The solve searches a grid, so a step costs about three"
             + " times as much, not the nine that testing every pair would; the picture still tests every sphere.") {
         @Override

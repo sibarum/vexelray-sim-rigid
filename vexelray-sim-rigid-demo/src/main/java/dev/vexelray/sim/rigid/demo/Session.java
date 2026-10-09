@@ -53,6 +53,7 @@ final class Session implements AutoCloseable {
     private int iterations;
     private SphereRunner.Backend backend;
     private SphereStep.Solve solve;
+    private double restitution;
     private Ratio speed = Ratio.of(1, 1);
     private boolean paused;
     private long frames;
@@ -101,10 +102,13 @@ final class Session implements AutoCloseable {
             world.hold(paused);
         }
         Controls.Solver wantedSolver = controls.solver();
-        if (wantedSolver != solver && solver != null) {
-            bus.publish(Messages.RELAX_TOPIC, new Relax(wantedSolver.omega, wantedSolver.averaged));
+        double wantedRestitution = controls.restitution();
+        if (solver != null && (wantedSolver != solver || wantedRestitution != restitution)) {
+            bus.publish(Messages.RELAX_TOPIC, new Relax(wantedSolver.omega, wantedSolver.averaged,
+                    wantedRestitution));
         }
         solver = wantedSolver;
+        restitution = wantedRestitution;
         boolean reset = controls.takeReset();
         Scenario wantedScenario = controls.scenario();
         int wantedSubsteps = controls.substeps();
@@ -120,7 +124,7 @@ final class Session implements AutoCloseable {
             backend = wantedBackend;
             solve = wantedSolve;
             bus.publish(Messages.BUILD_TOPIC, new Build(scenario, solve, substeps, iterations, carry, solver.omega,
-                    solver.averaged, backend));
+                    solver.averaged, restitution, backend));
         }
     }
 

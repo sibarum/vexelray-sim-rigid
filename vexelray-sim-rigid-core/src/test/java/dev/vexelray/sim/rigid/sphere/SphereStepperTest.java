@@ -117,8 +117,9 @@ class SphereStepperTest {
         new SphereStepper(step).step(runner);
         List<String> firsts = runner.segments.stream().map(s -> s.get(0).name()).toList();
         assertEquals(List.of("predict", "walls", "walls", "walls", "walls"), firsts);
-        assertEquals("velocity", runner.segments.get(2).get(1).name(), "a new substep closes the last one");
-        assertEquals("predict", runner.segments.get(2).get(2).name());
+        assertEquals(List.of("walls", "velocity", "bounce", "bounced", "predict"),
+                runner.segments.get(2).subList(0, 5).stream().map(Pass::name).toList(),
+                "a new substep closes the last one, restitution and all, before it predicts");
     }
 
     @Test

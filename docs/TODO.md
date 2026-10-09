@@ -205,7 +205,15 @@ contacts a step unsolved on the pile of 4096.
       solved, with its rounds and waits a step in the readings. In the demo the column rests under Gauss–Seidel at
       2.1% overlap and 7e-9 J, against Jacobi's 4.0% and 9e-5 J, for 160 rounds and 10 waits a step. The by-cell
       solve is deleted.
-- [ ] **Restitution**, as a velocity pass after the position solve, measured on a bounce's height.
+- [x] **Restitution** (2026-10-08): `Spheres.bounce`, XPBD's velocity pass after the position solve. A contact closing
+      faster than `2 |g| h` before the solve parts at `e` times that speed; slower is a resting contact, left alone,
+      so a stack does not jitter. Walls are contacts with no inverse mass. `BounceTest`, both backends and both solves:
+      a ball dropped 1 m rises to 0.249 m at `e = 0.5` and 0.809 m at `e = 0.9` (e² is 0.25 and 0.81), a head-on
+      elastic collision swaps the velocities with momentum kept to 1e-5, and a springy ball at rest stays at rest.
+      At `e = 0` nothing changes: every-pair Jacobi's sweep is the same to the last digit, and the two extra passes
+      cost 3 to 8 µs a substep. The demo has a restitution control and a scenario of bouncing balls. A finding on the
+      way: Jacobi on the grid does not repeat from run to run (a pile of 343 read 7.9%, 9.4% and 11% overlap on three
+      runs), because the sort is not stable and the sums follow its order; every pair and the contact list do.
 - [ ] **Rotation and friction**: an orientation per body, and friction at contacts, so a pile holds a slope and a
       sphere rolls.
 - [ ] **Boxes**: orientation, a contact manifold, and stacking measured the way the column is.

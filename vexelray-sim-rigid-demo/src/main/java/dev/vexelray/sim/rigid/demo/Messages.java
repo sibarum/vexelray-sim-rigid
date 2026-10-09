@@ -29,11 +29,11 @@ final class Messages {
      * acted on.
      */
     record Build(Scenario scenario, SphereStep.Solve solve, int substeps, int iterations, boolean carry, double omega,
-                 boolean averaged, SphereRunner.Backend backend) {
+                 boolean averaged, double restitution, SphereRunner.Backend backend) {
     }
 
-    /** How the solve relaxes, from the next step on. A sample: only the newest matters. */
-    record Relax(double omega, boolean averaged) {
+    /** How the solve relaxes, and how springy contacts are, from the next step on. A sample: only the newest matters. */
+    record Relax(double omega, boolean averaged, double restitution) {
     }
 
     /**

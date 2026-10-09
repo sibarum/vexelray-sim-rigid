@@ -46,13 +46,15 @@ final class Panel {
                         controls::solve),
                 new Pick<>("Solver", "Relaxation", List.of(Solver.values()), s -> s.label, controls::solver,
                         controls::solver),
+                new Pick<>("Solver", "Restitution", Controls.RESTITUTIONS, e -> e == 0 ? "None" : String.valueOf(e),
+                        controls::restitution, controls::restitution),
                 new Pick<>("Solver", "Substeps", Controls.SUBSTEPS, String::valueOf, controls::substeps,
                         controls::substeps),
                 new Pick<>("Solver", "Iterations", Controls.ITERATIONS, String::valueOf, controls::iterations,
                         controls::iterations),
-                new Pick<>("Playback", "Speed", Controls.SPEEDS, Controls::speedLabel, controls::speed,
+                new Pick<>("Running", "Speed", Controls.SPEEDS, Controls::speedLabel, controls::speed,
                         controls::speed),
-                new Pick<>("Physics", "Runs on", List.of(SphereRunner.Backend.values()), b -> b.label,
+                new Pick<>("Running", "Runs on", List.of(SphereRunner.Backend.values()), b -> b.label,
                         controls::backend, controls::backend));
 
         Node heading = gui.text("Readings").font(DemoLook.UI).textSize(DemoLook.HEADING)

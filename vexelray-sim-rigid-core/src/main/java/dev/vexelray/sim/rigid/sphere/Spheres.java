@@ -109,7 +109,6 @@ import static dev.supirvast.vastir.build.Body.v;
  * <ul>
  *   <li><b>No rotation, so no friction.</b> A sphere is a point with a radius. Frictionless spheres stack in a column
  *       held by walls, and a pile of them slumps flat; both are the technique, not bugs.</li>
- *   <li><b>No restitution.</b> Every contact is perfectly inelastic.</li>
  *   <li><b>Only spheres</b>, which is what makes contact a distance. Boxes need orientation and a contact manifold.</li>
  * </ul>
  *
@@ -121,8 +120,8 @@ public final class Spheres {
     /** The workgroup every pass must be registered with. Nothing here needs a particular one, nor a subgroup. */
     public static final int WORKGROUP = CountingSort.BLOCK;
 
-    /** {@code [h, gx, gy, gz, sx, sy, sz, omega, averaged]}, see {@link #params}. */
-    public static final int PARAM_COUNT = 9;
+    /** {@code [h, gx, gy, gz, sx, sy, sz, omega, averaged, restitution]}, see {@link #params}. */
+    public static final int PARAM_COUNT = 10;
 
     static final int H = 0;
     static final int GX = 1;
@@ -133,6 +132,7 @@ public final class Spheres {
     static final int SZ = 6;
     static final int OMEGA = 7;
     static final int AVERAGED = 8;
+    static final int RESTITUTION = 9;
 
     /** Below this squared distance two centres are taken as one point, which has no direction to part them along. */
     private static final float COINCIDENT = 1e-12f;
@@ -151,12 +151,26 @@ public final class Spheres {
      */
     public static int[] params(double h, double gx, double gy, double gz, double sx, double sy, double sz,
                                double omega, boolean averaged) {
+        return params(h, gx, gy, gz, sx, sy, sz, omega, averaged, 0);
+    }
+
+    /**
+     * As above, with restitution.
+     *
+     * @param restitution how much of a contact's approach speed it parts at, from 0, the default, which leaves spheres
+     *                    touching, to 1, which keeps the speed ({@link #bounce})
+     */
+    public static int[] params(double h, double gx, double gy, double gz, double sx, double sy, double sz,
+                               double omega, boolean averaged, double restitution) {
+        if (!(restitution >= 0) || !(restitution <= 1)) {
+            throw new IllegalArgumentException("restitution is in [0, 1], got " + restitution);
+        }
         if (!(h > 0) || !(sx > 0) || !(sy > 0) || !(sz > 0) || !(omega > 0) || !(omega <= 1)) {
             throw new IllegalArgumentException("h > 0, a box of positive size and 0 < omega <= 1, got h " + h
                     + ", box " + sx + " × " + sy + " × " + sz + ", omega " + omega);
         }
         return new int[] {bits(h), bits(gx), bits(gy), bits(gz), bits(sx), bits(sy), bits(sz), bits(omega),
-                bits(averaged ? 1 : 0)};
+                bits(averaged ? 1 : 0), bits(restitution)};
     }
 
     // --- the buffers each pass binds, in order -------------------------------------------------------------
@@ -173,7 +187,7 @@ public final class Spheres {
     static final String[] APPLY_NAMES = {"x", "y", "z", "r", "im", "cx", "cy", "cz", "dx", "dy", "dz", "params"};
     static final List<Buffer> APPLY_BUFFERS = bind(APPLY_NAMES);
 
-    static final String[] VELOCITY_NAMES = {"u", "v", "w", "dx", "dy", "dz", "params"};
+    static final String[] VELOCITY_NAMES = {"u", "v", "w", "dx", "dy", "dz", "params", "cx", "cy", "cz"};
     static final List<Buffer> VELOCITY_BUFFERS = bind(VELOCITY_NAMES);
 
     // --- the passes ----------------------------------------------------------------------------------------
@@ -729,23 +743,181 @@ public final class Spheres {
         }
     }
 
-    /** One invocation per sphere: what the constraints moved it by this substep, added as a velocity, and cleared. */
+    /**
+     * One invocation per sphere: what the constraints moved it by this substep, added as a velocity, and cleared. The
+     * velocity as it was before, the one the substep predicted with, is kept in {@code cx, cy, cz}, free by now, for
+     * {@link #bounce} to read how fast contacts were closing.
+     */
     public static Function velocity() {
         List<Buffer> bs = VELOCITY_BUFFERS;
         Buffer[] velocity = {bs.get(0), bs.get(1), bs.get(2)};
         Buffer[] displaced = {bs.get(3), bs.get(4), bs.get(5)};
         Buffer params = bs.get(6);
+        Buffer[] before = {bs.get(7), bs.get(8), bs.get(9)};
 
         Body b = new Body();
         LocalVar s = b.let("s", new Expr.InvocationId());
         b.when(lt(v(s), new Expr.InvocationCount()), t -> {
             LocalVar perH = t.let("perH", div(f(1), load(params, i(H))));
             for (int a = 0; a < 3; a++) {
-                t.store(velocity[a], v(s), add(load(velocity[a], v(s)), mul(load(displaced[a], v(s)), v(perH))));
+                LocalVar was = t.let("was", load(velocity[a], v(s)));
+                t.store(before[a], v(s), v(was));
+                t.store(velocity[a], v(s), add(v(was), mul(load(displaced[a], v(s)), v(perH))));
                 t.store(displaced[a], v(s), f(0));
             }
         });
         return function("spheresVelocity", b);
+    }
+
+    static final String[] BOUNCE_NAMES = {"x", "y", "z", "r", "im", "u", "v", "w", "cx", "cy", "cz", "dx", "dy", "dz",
+            "params"};
+    static final List<Buffer> BOUNCE_BUFFERS = bind(BOUNCE_NAMES);
+    static final String[] GRID_BOUNCE_NAMES = {"x", "y", "z", "r", "im", "u", "v", "w", "cx", "cy", "cz", "dx", "dy",
+            "dz", "params", "keys", "starts", "order"};
+    static final List<Buffer> GRID_BOUNCE_BUFFERS = bind(GRID_BOUNCE_NAMES, 15);
+
+    /** How near a sphere is taken to touch another or a wall, for {@link #bounce}: the contact list's margin. */
+    private static final float TOUCH_MARGIN = LIST_MARGIN;
+
+    /**
+     * One invocation per sphere, after {@link #velocity}: restitution, the change of velocity that makes each contact
+     * part at {@code e} times the speed it was closing at, {@code e} being {@link #params}' {@code restitution}. Into
+     * {@code dx, dy, dz}, which {@link #velocity} has cleared, for {@link #bounced} to add; every sphere reads the
+     * velocities as {@link #velocity} left them, so each pair's two changes are equal and opposite by mass, and
+     * momentum is kept.
+     *
+     * <p>XPBD's own velocity pass (Müller et al., 2020). For a contact touching after the substep's solve, with normal
+     * {@code n} from the other sphere to this one: {@code v̄ₙ} is how fast the two were closing before the solve, from
+     * the velocities {@link #velocity} kept, and {@code vₙ} how fast they part after it. Where they were closing faster
+     * than {@code 2 |g| h}, the parting speed is set to {@code −e v̄ₙ}, each sphere taking its share of the change by
+     * inverse mass. Slower than that is a resting contact, and is left alone: a stack would otherwise jitter on the
+     * speed gravity gives it in one substep. A wall is a contact with a sphere of no inverse mass.
+     *
+     * <p>With {@code e} zero this does nothing at all, so a solve without restitution is the solve it always was. A
+     * sphere touching several others takes the sum of every contact's change, which, like Jacobi's moves, can
+     * overshoot where many contacts close at once.
+     */
+    public static Function bounce() {
+        return bounce(null);
+    }
+
+    /** {@link #bounce()}, testing only the spheres in {@code grid}'s cells around this one, as {@link #solve(SphereGrid)} does. */
+    public static Function bounce(SphereGrid grid) {
+        List<Buffer> bs = grid == null ? BOUNCE_BUFFERS : GRID_BOUNCE_BUFFERS;
+        Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
+        Buffer radius = bs.get(3);
+        Buffer im = bs.get(4);
+        Buffer[] velocity = {bs.get(5), bs.get(6), bs.get(7)};
+        Buffer[] before = {bs.get(8), bs.get(9), bs.get(10)};
+        Buffer[] change = {bs.get(11), bs.get(12), bs.get(13)};
+        Buffer params = bs.get(14);
+        int[] extent = {SX, SY, SZ};
+
+        Body b = new Body();
+        LocalVar s = b.let("s", new Expr.InvocationId());
+        LocalVar count = b.let("count", new Expr.InvocationCount());
+        b.when(lt(v(s), v(count)), t -> {
+            LocalVar e = t.let("e", load(params, i(RESTITUTION)));
+            LocalVar wa = t.let("wa", load(im, v(s)));
+            t.when(and(gt(v(e), f(0)), gt(v(wa), f(0))), on -> {
+                LocalVar h = on.let("h", load(params, i(H)));
+                LocalVar gx = on.let("gx", load(params, i(GX)));
+                LocalVar gy = on.let("gy", load(params, i(GY)));
+                LocalVar gz = on.let("gz", load(params, i(GZ)));
+                LocalVar resting = on.let("resting", mul(mul(f(2), v(h)),
+                        sqrt(add(mul(v(gx), v(gx)), add(mul(v(gy), v(gy)), mul(v(gz), v(gz)))))));
+                LocalVar ra = on.let("ra", load(radius, v(s)));
+                LocalVar[] mine = new LocalVar[3];
+                LocalVar[] vel = new LocalVar[3];
+                LocalVar[] was = new LocalVar[3];
+                LocalVar[] sum = new LocalVar[3];
+                for (int a = 0; a < 3; a++) {
+                    mine[a] = on.let("p", load(at[a], v(s)));
+                    vel[a] = on.let("vel", load(velocity[a], v(s)));
+                    was[a] = on.let("was", load(before[a], v(s)));
+                    sum[a] = on.let("sum", f(0));
+                }
+                java.util.function.BiConsumer<Body, LocalVar> against = (run, o) -> run.when(
+                        not(eq(v(o), v(s))), other -> {
+                            LocalVar[] d = new LocalVar[3];
+                            for (int a = 0; a < 3; a++) {
+                                d[a] = other.let("d", sub(v(mine[a]), load(at[a], v(o))));
+                            }
+                            LocalVar d2 = other.let("d2", add(mul(v(d[0]), v(d[0])),
+                                    add(mul(v(d[1]), v(d[1])), mul(v(d[2]), v(d[2])))));
+                            LocalVar near = other.let("near", mul(add(v(ra), load(radius, v(o))),
+                                    f(1 + TOUCH_MARGIN)));
+                            LocalVar wsum = other.let("wsum", add(v(wa), load(im, v(o))));
+                            other.when(and(lt(v(d2), mul(v(near), v(near))), gt(v(d2), f(COINCIDENT))),
+                                    touching -> {
+                                        LocalVar dist = touching.let("dist", sqrt(v(d2)));
+                                        LocalVar closing = touching.let("closing", f(0));
+                                        LocalVar parting = touching.let("parting", f(0));
+                                        for (int a = 0; a < 3; a++) {
+                                            LocalVar n = touching.let("n", div(v(d[a]), v(dist)));
+                                            touching.set(closing, add(v(closing), mul(v(n),
+                                                    sub(v(was[a]), load(before[a], v(o))))));
+                                            touching.set(parting, add(v(parting), mul(v(n),
+                                                    sub(v(vel[a]), load(velocity[a], v(o))))));
+                                        }
+                                        touching.when(lt(v(closing), neg(v(resting))), bouncing -> {
+                                            LocalVar k = bouncing.let("k", div(mul(sub(neg(mul(v(e),
+                                                    v(closing))), v(parting)), v(wa)), mul(v(wsum), v(dist))));
+                                            for (int a = 0; a < 3; a++) {
+                                                bouncing.set(sum[a], add(v(sum[a]), mul(v(k), v(d[a]))));
+                                            }
+                                        });
+                                    });
+                        });
+                if (grid == null) {
+                    LocalVar o = on.let("o", i(0));
+                    on.loop(lt(v(o), v(count)), pass -> {
+                        against.accept(pass, o);
+                        pass.set(o, add(v(o), i(1)));
+                    });
+                } else {
+                    int nx = grid.nx();
+                    int ny = grid.ny();
+                    LocalVar key = on.let("key", load(bs.get(15), v(s)));
+                    LocalVar ix = on.let("ix", mod(v(key), i(nx)));
+                    LocalVar iy = on.let("iy", mod(div(v(key), i(nx)), i(ny)));
+                    LocalVar iz = on.let("iz", div(v(key), i(nx * ny)));
+                    around(on, grid, ix, iy, iz, bs.get(16), bs.get(17), against);
+                }
+                // The walls: each a contact with no inverse mass, so the sphere takes the whole change.
+                for (int a = 0; a < 3; a++) {
+                    int axis = a;
+                    LocalVar reach = on.let("reach", mul(v(ra), f(1 + TOUCH_MARGIN)));
+                    on.when(lt(v(mine[a]), v(reach)), low -> low.when(lt(v(was[axis]), neg(v(resting))),
+                            closing -> closing.set(sum[axis], add(v(sum[axis]),
+                                    sub(neg(mul(v(e), v(was[axis]))), v(vel[axis]))))));
+                    on.when(gt(v(mine[a]), sub(load(params, i(extent[a])), v(reach))), high -> high.when(
+                            gt(v(was[axis]), v(resting)), closing -> closing.set(sum[axis], add(v(sum[axis]),
+                                    sub(neg(mul(v(e), v(was[axis]))), v(vel[axis]))))));
+                }
+                for (int a = 0; a < 3; a++) {
+                    on.store(change[a], v(s), v(sum[a]));
+                }
+            });
+        });
+        return function(grid == null ? "spheresBounce" : "spheresGridBounce", b);
+    }
+
+    static final String[] BOUNCED_NAMES = {"u", "v", "w", "dx", "dy", "dz"};
+    static final List<Buffer> BOUNCED_BUFFERS = bind(BOUNCED_NAMES);
+
+    /** One invocation per sphere: the change {@link #bounce} made, added to the velocity, and cleared. */
+    public static Function bounced() {
+        List<Buffer> bs = BOUNCED_BUFFERS;
+        Body b = new Body();
+        LocalVar s = b.let("s", new Expr.InvocationId());
+        b.when(lt(v(s), new Expr.InvocationCount()), t -> {
+            for (int a = 0; a < 3; a++) {
+                t.store(bs.get(a), v(s), add(load(bs.get(a), v(s)), load(bs.get(3 + a), v(s))));
+                t.store(bs.get(3 + a), v(s), f(0));
+            }
+        });
+        return function("spheresBounced", b);
     }
 
     // --- for a picture -------------------------------------------------------------------------------------

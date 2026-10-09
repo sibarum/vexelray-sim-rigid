@@ -72,7 +72,8 @@ public final class SphereStep implements Buffered {
 
     // What the segments of a step run until done ({@link #opening}) are made of; null unless {@link #untilDone}.
     private final Pass predict;
-    private final Pass velocity;
+    /** What closes a substep: velocity from the moves, then restitution ({@link Spheres#bounce}) and its change added. */
+    private final List<Pass> velocity;
     private final Pass walls;
     private final Pass show;
     private final List<Pass> prepare = new ArrayList<>();
@@ -140,8 +141,16 @@ public final class SphereStep implements Buffered {
         predict = new Pass("predict", Spheres.predict(), Spheres.PREDICT_BUFFERS,
                 List.of(Spheres.PREDICT_NAMES), spheres);
         Pass apply = new Pass("apply", Spheres.apply(), Spheres.APPLY_BUFFERS, List.of(Spheres.APPLY_NAMES), spheres);
-        velocity = new Pass("velocity", Spheres.velocity(), Spheres.VELOCITY_BUFFERS,
-                List.of(Spheres.VELOCITY_NAMES), spheres);
+        velocity = List.of(
+                new Pass("velocity", Spheres.velocity(), Spheres.VELOCITY_BUFFERS, List.of(Spheres.VELOCITY_NAMES),
+                        spheres),
+                grid == null
+                        ? new Pass("bounce", Spheres.bounce(), Spheres.BOUNCE_BUFFERS, List.of(Spheres.BOUNCE_NAMES),
+                                spheres)
+                        : new Pass("bounce", Spheres.bounce(grid), Spheres.GRID_BOUNCE_BUFFERS,
+                                List.of(Spheres.GRID_BOUNCE_NAMES), spheres),
+                new Pass("bounced", Spheres.bounced(), Spheres.BOUNCED_BUFFERS, List.of(Spheres.BOUNCED_NAMES),
+                        spheres));
         walls = new Pass("walls", Spheres.walls(), Spheres.WALLS_BUFFERS, List.of(Spheres.WALLS_NAMES), spheres);
         // Before every iteration of a substep, once: the sort, and what is made from it: {@link #prepare}.
         // An iteration's passes, which may differ by iteration.
@@ -182,7 +191,7 @@ public final class SphereStep implements Buffered {
             for (List<Pass> it : iteration) {
                 passes.addAll(it);
             }
-            passes.add(velocity);
+            passes.addAll(velocity);
         }
         show = new Pass("show", Spheres.show(), Spheres.SHOW_BUFFERS, List.of(Spheres.SHOW_NAMES), spheres);
         passes.add(show);
@@ -295,7 +304,7 @@ public final class SphereStep implements Buffered {
             } else {
                 if (substep > 0) {
                     passes.add(walls);
-                    passes.add(velocity);
+                    passes.addAll(velocity);
                 }
                 passes.add(predict);
                 passes.addAll(prepare);
@@ -319,7 +328,12 @@ public final class SphereStep implements Buffered {
     /** What ends a step once its last pass is done: the walls, velocity, and the picture's buffer. */
     public List<Pass> closing() {
         requireUntilDone();
-        return segments.computeIfAbsent("close", k -> List.of(walls, velocity, show));
+        return segments.computeIfAbsent("close", k -> {
+            List<Pass> passes = new ArrayList<>(List.of(walls));
+            passes.addAll(velocity);
+            passes.add(show);
+            return List.copyOf(passes);
+        });
     }
 
     private void addRounds(List<Pass> passes, int iteration, int from, int rounds) {
@@ -351,7 +365,7 @@ public final class SphereStep implements Buffered {
     /**
      * One step: per substep, predict, then the sort if there is a grid, and the contact list if the solve wants
      * one; then {@link #iterations} passes of the solve — solve and apply for Jacobi, the rounds and
-     * then the walls for Gauss–Seidel — then velocity; and once at the end, {@link Spheres#show show}, for a
+     * then the walls for Gauss–Seidel — then velocity, and restitution; and once at the end, {@link Spheres#show show}, for a
      * picture.
      */
     public List<Pass> step() {

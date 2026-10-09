@@ -10,7 +10,7 @@ implementation is chosen from the results. [docs/architecture.md](docs/architect
 
 | Module | What it holds |
 | --- | --- |
-| `vexelray-sim-rigid-core` | The kernels, in SupirVast IR, and the diagnostics that judge a state. No engine, no window. So far: spheres in a walled box, with position-based contact (XPBD, Jacobi or Gauss–Seidel), substepped, and a grid broad phase. |
+| `vexelray-sim-rigid-core` | The kernels, in SupirVast IR, and the diagnostics that judge a state. No engine, no window. So far: spheres in a walled box, with position-based contact (XPBD, Jacobi or Gauss–Seidel) and restitution, substepped, and a grid broad phase. |
 | `vexelray-sim-rigid-gui` | The simulation on the stack: `SphereSimulation` steps it on resident buffers on the window's own GPU, every contact solved, and keeps each finished step in a `ShownRing`; `SphereView` ray-traces the spheres straight from the ring's newest slot, blended between that step and the one before. |
 | `vexelray-sim-rigid-demo` | A framework application: the scenarios, the solver's settings beside the readings they move. The physics is a `@Component` on a lane of its own, on the compute queue the application lends it, and the frame never waits for it. The clock is Kronometer's: a fixed 60 Hz rate inside a tempo the playback speed scales, whose due steps the frame counts for the physics lane to run. |
 
@@ -29,7 +29,7 @@ itself and jitters. Gauss–Seidel over a contact list, solved in rounds of cont
 invocation per contact, rests the column with under a millionth of Jacobi's moving energy, and lets a pile settle.
 On a pile of 4096 it costs 1.2 ms a step at 10 substeps, about twice what Jacobi costs for the same overlap. The
 demo offers both, on the grid, and Gauss–Seidel there runs until every contact is solved. There is no rotation, so no
-friction, and no restitution.
+friction; contacts bounce as much as the restitution asked for.
 
 The physics timing in [docs/physics-timing.md](docs/physics-timing.md) is built: every contact solved every step,
 physics on a second Vulkan queue and a thread of its own, finished steps handed to the frame through a ring, and a

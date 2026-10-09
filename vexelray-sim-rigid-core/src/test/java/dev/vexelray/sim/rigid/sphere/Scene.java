@@ -38,6 +38,8 @@ final class Scene implements AutoCloseable {
     int iterations = 1;
     double omega = 1;
     boolean averaged = true;
+    /** How much of a contact's closing speed it parts at: {@link Spheres#bounce}. */
+    double restitution;
     /** Whether the solve searches a grid, its cells as wide as the widest sphere, or tests every pair. */
     boolean grid;
     /** How a pass solves; Gauss–Seidel searches the grid whatever {@link #grid} says. */
@@ -109,7 +111,7 @@ final class Scene implements AutoCloseable {
             runner.clear();
         }
         step.constants().forEach(runner::write);
-        runner.write("params", Spheres.params(dt / substeps, gx, gy, gz, sx, sy, sz, omega, averaged));
+        runner.write("params", Spheres.params(dt / substeps, gx, gy, gz, sx, sy, sz, omega, averaged, restitution));
         runner.write("x", x);
         runner.write("y", y);
         runner.write("z", z);

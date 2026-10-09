@@ -41,12 +41,16 @@ final class Controls {
     static final List<SphereStep.Solve> SOLVES = List.of(SphereStep.Solve.JACOBI,
             SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT);
 
+    /** Restitution: how much of a contact's closing speed it parts at. */
+    static final List<Double> RESTITUTIONS = List.of(0.0, 0.3, 0.6, 0.9);
+
     static final List<Integer> SUBSTEPS = List.of(1, 2, 5, 10, 20, 40);
     static final List<Integer> ITERATIONS = List.of(1, 2, 5, 10);
 
     private Scenario scenario = Scenario.COLUMN;
     private Solver solver = Solver.AVERAGED;
     private SphereStep.Solve solve = SphereStep.Solve.JACOBI;
+    private double restitution;
     private int substeps = 10;
     private int iterations = 1;
     private SphereRunner.Backend backend = SphereRunner.Backend.QUEUE;
@@ -87,6 +91,15 @@ final class Controls {
 
     synchronized void solve(SphereStep.Solve s) {
         solve = s;
+        version++;
+    }
+
+    synchronized double restitution() {
+        return restitution;
+    }
+
+    synchronized void restitution(Double e) {
+        restitution = e;
         version++;
     }
 
