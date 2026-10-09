@@ -273,10 +273,11 @@ public final class SphereStep implements Buffered {
     /** A round's buffers, for the {@code g}-th dispatch of a pass, whose constants are {@code kind}. */
     private static List<String> roundNames(int g, String kind) {
         List<String> names = new ArrayList<>(List.of(Spheres.ROUND_NAMES));
-        names.set(13, Spheres.CLAIMS[(g + 2) % 3]);
-        names.set(14, Spheres.CLAIMS[g % 3]);
-        names.set(15, Spheres.CLAIMS[(g + 1) % 3]);
-        names.set(16, kind);
+        int at = Spheres.ROUND_CHECKED;
+        names.set(at, Spheres.CLAIMS[(g + 2) % 3]);
+        names.set(at + 1, Spheres.CLAIMS[g % 3]);
+        names.set(at + 2, Spheres.CLAIMS[(g + 1) % 3]);
+        names.set(at + 3, kind);
         return names;
     }
 

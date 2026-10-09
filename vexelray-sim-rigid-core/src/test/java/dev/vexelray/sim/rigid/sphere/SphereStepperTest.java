@@ -43,7 +43,7 @@ class SphereStepperTest {
             for (Pass pass : passes) {
                 if (pass.name().startsWith("round")) {
                     ran++;
-                    rounds.add(pass.buffers().get(16));
+                    rounds.add(pass.buffers().get(Spheres.ROUND_CHECKED + 3));
                 }
             }
             int[] readout = new int[Spheres.READOUT_WORDS];

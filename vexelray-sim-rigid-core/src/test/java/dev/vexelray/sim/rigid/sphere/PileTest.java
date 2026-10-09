@@ -21,13 +21,16 @@ class PileTest {
      * A hundred and twenty-five spheres dropped as a loose lattice into a box, for three seconds, with every pair
      * tested, with the grid, and by Gauss–Seidel. Nothing goes non-finite, nothing leaves the box, no sphere passes
      * into another by more than a fifth of a radius, and the pile ends with less energy than it started with:
-     * contact only ever takes energy away.
+     * contact only ever takes energy away. Gauss–Seidel also with friction, which only takes energy too, spin
+     * counted.
      */
     @ParameterizedTest
-    @CsvSource({"CPU, false, JACOBI", "CPU, true, JACOBI",
-            "CPU, true, GAUSS_SEIDEL_BY_CONTACT", "GPU, false, JACOBI", "GPU, true, JACOBI",
-            "GPU, true, GAUSS_SEIDEL_BY_CONTACT"})
-    void aDroppedPileStaysInsideApartAndLosesEnergy(Backend backend, boolean grid, SphereStep.Solve solve) {
+    @CsvSource({"CPU, false, JACOBI, 0", "CPU, true, JACOBI, 0",
+            "CPU, true, GAUSS_SEIDEL_BY_CONTACT, 0", "CPU, true, GAUSS_SEIDEL_BY_CONTACT, 0.5",
+            "GPU, false, JACOBI, 0", "GPU, true, JACOBI, 0",
+            "GPU, true, GAUSS_SEIDEL_BY_CONTACT, 0", "GPU, true, GAUSS_SEIDEL_BY_CONTACT, 0.5"})
+    void aDroppedPileStaysInsideApartAndLosesEnergy(Backend backend, boolean grid, SphereStep.Solve solve,
+                                                    double mu) {
         int side = 5;
         try (Scene scene = new Scene(side * side * side).uniform(0.03, 0.1)) {
             scene.sx = scene.sz = 0.4;
@@ -35,6 +38,7 @@ class PileTest {
             scene.substeps = 20;
             scene.grid = grid;
             scene.solve = solve;
+            scene.muStatic = scene.muKinetic = mu;
             Random random = new Random(11);
             int k = 0;
             for (int i = 0; i < side; i++) {

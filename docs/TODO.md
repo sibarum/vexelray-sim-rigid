@@ -226,6 +226,55 @@ contacts a step unsolved on the pile of 4096.
         second to 2e-4. The sweep is the same to the last digit (Jacobi on the grid aside, which never repeats) and
         costs the same within run-to-run noise. `SphereDiagnostics` counts spin in the moving energy, and adds the
         angular momentum about the origin for friction's conservation test.
+  - [x] **Friction** (2026-10-09). `Spheres.friction`, in Gauss–Seidel's contacts and walls, as a move and a turn
+        right after a contact's normal correction. The slip is how far the two contact points have moved apart along
+        the surface over the substep, from each centre's `h v + dx` and turn `h ω + t`, added up as computed. Removing
+        it takes a tangential impulse `|slip| / W`, `W = Σ (w + r² / I)`, which is `3.5 w` at a solid sphere's
+        surface; static friction takes it all while that is within `μs λₙ`, `λₙ` being the normal move over the
+        inverse masses, and kinetic friction `μk λₙ` past it. Coulomb's law, with no velocity pass of its own. Between
+        two spheres it acts at one point both share, where the centre line divides at the radii. A wall's friction can
+        move a sphere into a wall already projected from, so the walls project once more after it (a pile otherwise
+        ended 2.7e-5 of a radius outside). `FrictionTest`, both backends:
+
+        | Case | Known answer | Holds to |
+        | --- | --- | --- |
+        | Sliding at 2 m/s, μ = 0.3 | slows by `μ g`, spins up by `5 μ g / 2r`, then rolls at `5/7 v₀` with `ω = −v / r` | 1e-2 m/s, 5e-3 m/s |
+        | 20° slope, μ = 0.5 | rolls at `5/7 g sin θ` | 1e-2 m/s |
+        | 20° slope, μ = 0.05 | slides at `g (sin θ − μ cos θ)`, spins up at `5 μ g cos θ / 2r` | 1e-2 m/s |
+        | Column of 10, μ = 0.5 | rests upright | KE < 1e-6 J |
+
+        **Angular momentum is kept to first order, and that is XPBD's.** A glancing collision changes `L` about the
+        origin by 1.2e-3 of 1 at 10 substeps without friction, halving as the substeps double; with friction by 8e-4,
+        3e-4 and 1.7e-4. Friction adds nothing. A correction is directed by the predicted positions, and changes `L`
+        by `Σ m x₀ × Δx / h` with `x₀` the substep's start, which is not along it for a pair moving across each
+        other.
+
+        **A finding on the way: a GPU kernel lost a store.** The walls pass stored a sphere's projected position, then,
+        in friction's branch, loaded it again and stored it once more. On the RTX the second load read the position
+        from before the first store, and a sphere on the floor fell through it as if there were none, while the CPU
+        was right. The SPIR-V is right and `spirv-val` passes it, and smaller kernels of the same shape ran right on
+        the same GPU: the cause is not found. Every pass that friction touches now holds a sphere's position, moves and
+        turns in locals (`Held`), loaded once and stored once. No pass here reloads what it stored.
+
+        **Measured**, GPU, until done, μ = 0.5 against none; overlap / moving energy / ms a step after the sweep's
+        3 or 4 s: with no friction, every state is the same as before to the last digit (Jacobi on the grid aside),
+        and fixed rounds cost 2–4% more for the bigger kernel.
+
+        | Scene | Substeps | μ = 0 | μ = 0.5 |
+        | --- | --- | --- | --- |
+        | Column of 20 | 10 | 2.1% / 4.8e-9 J / 1.29 | 2.1% / 7.6e-9 J / 1.37 |
+        | Pile of 343 | 10 | 2.4% / 9.1e-6 J / 1.63 | 3.9% / 3.5e-2 J / 2.09 |
+        | Pile of 343 | 20 | 0.57% / 2.0e-2 J / 3.19 | 0.92% / 8.3e-3 J / 3.31 |
+        | Pile of 4096 | 10 | 11% / 7.7e-2 J / 2.06 | 11% / 1.6 J / 2.04 |
+        | Pile of 4096 | 20 | 3.3% / 0.11 J / 3.74 | 3.1% / 0.54 J / 3.81 |
+
+        **What does not hold yet: a pile with friction never quite rests.** It slumps less, and its energy only falls,
+        but it creeps. The pile of 343 at 10 × 1 loses about 0.4 J of potential energy a second from 2 s to 4 s,
+        with 0.02–0.03 J moving, three quarters of it spin; most spheres spin in place far faster than they move.
+        Four iterations, or 40 substeps, cut what is moving tenfold and hold a taller pile, but leave the creep at
+        about the same rate, so it is not friction's convergence. Next to look at, before rolling resistance: a
+        contact that a substep corrects by nothing, because an earlier contact in the order has parted it, has
+        `λₙ = 0` and no friction that substep, whatever weight it carries.
 - [ ] **Boxes**: orientation, a contact manifold, and stacking measured the way the column is.
 - [ ] **Fixed point against f32**, as the fluid's scatter was measured. The velocity finding above is a reason to
       look: f32 positions already cost something here.

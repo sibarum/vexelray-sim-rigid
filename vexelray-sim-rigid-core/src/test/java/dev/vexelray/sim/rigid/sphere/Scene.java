@@ -44,6 +44,9 @@ final class Scene implements AutoCloseable {
     boolean averaged = true;
     /** How much of a contact's closing speed it parts at: {@link Spheres#bounce}. */
     double restitution;
+    /** Friction, static and kinetic: {@link Spheres#friction}, applied by Gauss–Seidel only. */
+    double muStatic;
+    double muKinetic;
     /** Whether the solve searches a grid, its cells as wide as the widest sphere, or tests every pair. */
     boolean grid;
     /** How a pass solves; Gauss–Seidel searches the grid whatever {@link #grid} says. */
@@ -118,7 +121,8 @@ final class Scene implements AutoCloseable {
             runner.clear();
         }
         step.constants().forEach(runner::write);
-        runner.write("params", Spheres.params(dt / substeps, gx, gy, gz, sx, sy, sz, omega, averaged, restitution));
+        runner.write("params", Spheres.params(dt / substeps, gx, gy, gz, sx, sy, sz, omega, averaged, restitution,
+                muStatic, muKinetic));
         runner.write("x", x);
         runner.write("y", y);
         runner.write("z", z);
