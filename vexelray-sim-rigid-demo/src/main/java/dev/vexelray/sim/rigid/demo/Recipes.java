@@ -19,7 +19,7 @@ import sibarum.kronometer.Ratio;
 import sibarum.kronometer.Tempo;
 
 /**
- * What the demo builds, one recipe a part, and nothing about when: {@code RigidDemoWiring} is generated from this and
+ * What the demo builds, one recipe a part, and nothing about when: {@code RigidDemoAppWiring} is generated from this and
  * from {@link Physics}, and builds each part in the phase its parameters put it in.
  *
  * <p>Three parts are shared between the frame and the physics lane, and are the only three: the world's clock, which

@@ -63,3 +63,38 @@ the camera back; drag in the picture to turn it and use the wheel to zoom. With 
 socket, and `ottermate` (in `vexelray-gui/vexelray-gui-automation-cli`) can drive it and photograph the window. The
 readings are landmarks named `reading.about`, `reading.time`, `reading.overlap`, `reading.energy`, `reading.speed`,
 `reading.cost` and `reading.dilation`.
+
+### Native executable
+
+With a GraalVM JDK (25, as `JAVA_HOME`), from a Visual Studio developer prompt (or after `vcvars64.bat`, so
+`link.exe` is MSVC's and `rc.exe` is on `PATH`), the demo builds to a native binary as two editions of the same code,
+as the fluid demo's does. Both are profile-gated, so ordinary builds stay fast:
+
+```bash
+mvn -Pnative-release -pl vexelray-sim-rigid-demo -am package -DskipTests
+```
+
+```bash
+mvn -Pnative -pl vexelray-sim-rigid-demo -am package -DskipTests
+```
+
+- **release** gives `vexelray-sim-rigid-demo/target/rigid-sim.exe`: what ships, and what `installer.json` points at.
+  A Windows GUI subsystem program with no console window, built without the automation modules: `RigidDemoApp` is
+  compiled from `src/edition-release`, which names no `AutomationStarter`, so the binary cannot open a driving socket.
+- **debug** gives `vexelray-sim-rigid-demo/target/rigid-sim-debug.exe`: a console program with automation, so
+  `--automation=0` prints the port `ottermate --launch` reads. The plain JVM build, the tests and `exec:exec` are this
+  edition too.
+
+Both link the icon, `vexelray-sim-rigid-demo/src/main/rc/rigid-sim.ico`: `rigid-sim.svg` (the suite icon canvas's
+Rigid experiments primary) rendered by `vex-suite-common`'s `tools/Ico.java`; the window, file and light variants are
+beside it. The libraries carry their own reachability metadata; what is this demo's own (its main class, LWJGL,
+SupirVast's bundled SPIR-V tools, JDK entries) is in `vexelray-sim-rigid-demo/src/main/resources/META-INF/native-image/`,
+started from the fluid demo's, whose README says how to record it again with the tracing agent. A metadata gap does not
+fail the build, only the binary when it reaches the missing call, so run it afterwards. Only the GPU path has been
+tried.
+
+### Installer
+
+`installer.json` describes a per-user install of the release edition through
+[`vexelray-installer`](https://github.com/sibarum/vexelray-installer), as the fluid demo's does: `rigid-sim.exe` with
+its icon, Start menu and desktop shortcuts and an Apps entry. The installer scripts are not generated yet.

@@ -26,6 +26,17 @@
         <!-- The automation driver: "off", "on" for the default port, or a port number; 0 is a free one. -->
         <automation>off</automation>
         <app.jvmArgs></app.jvmArgs>
+        <!--
+          Two editions of the same code. The debug edition links the automation socket; the release edition does not
+          contain it at all: -Pnative-release swaps the source root below for src/edition-release (a RigidDemoApp that
+          names no AutomationStarter) and gives the automation modules scope test, so they are on no runtime classpath.
+          Everything but -Pnative-release - tests, exec:exec, -Pnative - is the debug edition.
+        -->
+        <edition.src>src/edition-debug/java</edition.src>
+        <automation.scope>compile</automation.scope>
+        <!-- The debug edition is a console program, so ottermate can read the port it prints. -->
+        <native.imageName>rigid-sim-debug</native.imageName>
+        <native.subsystem>CONSOLE</native.subsystem>
     </properties>
 
     <dependencies>
@@ -43,11 +54,12 @@
             <artifactId>vexelray-framework-shell</artifactId>
             <version>${vexelray.framework.version}</version>
         </dependency>
-        <!-- The driving socket, off unless asked for. -->
+        <!-- The driving socket, off unless asked for; in the debug edition only. -->
         <dependency>
             <groupId>dev.vexelray.framework</groupId>
             <artifactId>vexelray-framework-automation</artifactId>
             <version>${vexelray.framework.version}</version>
+            <scope>${automation.scope}</scope>
         </dependency>
         <dependency>
             <groupId>dev.vexelray.gui</groupId>
@@ -58,6 +70,7 @@
             <groupId>dev.vexelray.gui</groupId>
             <artifactId>vexelray-gui-automation</artifactId>
             <version>${vexelray.gui.version}</version>
+            <scope>${automation.scope}</scope>
         </dependency>
         <dependency>
             <groupId>sibarum.tactroller</groupId>
@@ -72,12 +85,93 @@
     </dependencies>
 
     <build>
+        <pluginManagement>
+            <plugins>
+                <!--
+                  GraalVM native image, shared by -Pnative and -Pnative-release, which differ only in the image's
+                  name, its subsystem and which edition is compiled. The libraries bring their own reachability
+                  metadata; this program's is under src/main/resources/META-INF/native-image/.
+                -->
+                <plugin>
+                    <groupId>org.graalvm.buildtools</groupId>
+                    <artifactId>native-maven-plugin</artifactId>
+                    <version>0.10.6</version>
+                    <extensions>true</extensions>
+                    <executions>
+                        <execution>
+                            <id>build-native</id>
+                            <goals><goal>compile-no-fork</goal></goals>
+                            <phase>package</phase>
+                        </execution>
+                    </executions>
+                    <configuration>
+                        <imageName>${native.imageName}</imageName>
+                        <mainClass>${app.mainClass}</mainClass>
+                        <buildArgs>
+                            <!-- The FFM flags, the shaders and the font atlas come from the libraries' own
+                                 META-INF/native-image metadata. -->
+                            <buildArg>--no-fallback</buildArg>
+                            <buildArg>-Dstdout.encoding=UTF-8</buildArg>
+                            <!-- WINDOWS = no console window, and /ENTRY:mainCRTStartup is not optional alongside it:
+                                 the linker would otherwise look for WinMain, and the image's entry is the C main.
+                                 CONSOLE is the linker's default, spelled out so both editions pass the same
+                                 options. Windows linker options. -->
+                            <buildArg>-H:NativeLinkerOption=/SUBSYSTEM:${native.subsystem}</buildArg>
+                            <buildArg>-H:NativeLinkerOption=/ENTRY:mainCRTStartup</buildArg>
+                            <buildArg>-H:NativeLinkerOption=${project.build.directory}/rigid-sim.res</buildArg>
+                        </buildArgs>
+                    </configuration>
+                </plugin>
+                <!-- The executable's icon: a resource linked into the program, so it has to exist as a compiled .res
+                     before link time. rc.exe is the Windows SDK's resource compiler and must be on PATH, as it is in a
+                     Visual Studio developer prompt (which the native build already needs for link.exe). -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-antrun-plugin</artifactId>
+                    <version>3.1.0</version>
+                    <executions>
+                        <execution>
+                            <id>compile-icon-resource</id>
+                            <phase>prepare-package</phase>
+                            <goals><goal>run</goal></goals>
+                            <configuration>
+                                <target>
+                                    <exec executable="rc.exe" searchpath="true" failonerror="true">
+                                        <arg value="/nologo"/>
+                                        <arg value="/fo"/>
+                                        <arg file="${project.build.directory}/rigid-sim.res"/>
+                                        <arg file="${project.basedir}/src/main/rc/rigid-sim.rc"/>
+                                    </exec>
+                                </target>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
         <plugins>
+            <!-- The edition's own source (RigidDemoApp): src/edition-debug, or src/edition-release under
+                 -Pnative-release. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <id>add-edition-source</id>
+                        <phase>generate-sources</phase>
+                        <goals><goal>add-source</goal></goals>
+                        <configuration>
+                            <sources><source>${edition.src}</source></sources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
-                    <!-- The framework's annotation processor: it generates RigidDemoWiring from Recipes and Physics,
+                    <!-- The framework's annotation processor: it generates RigidDemoAppWiring from Recipes and Physics,
                          and what its vocabulary calls a compile error is one. Named rather than found, because since
                          JDK 23 javac runs no processor it merely finds on the class path. -->
                     <annotationProcessorPaths>
@@ -111,6 +205,52 @@
     </build>
 
     <profiles>
+        <!--
+          GraalVM native images, profile-gated as the fluid demo's are: native-image takes a minute and needs a
+          GraalVM JDK, and an ordinary package must not pay for it. Both run rc.exe for the icon (src/main/rc), so run
+          them from a Visual Studio developer prompt, which link.exe already asks for.
+
+          mvn -Pnative-release -pl vexelray-sim-rigid-demo -am package  ->  target/rigid-sim.exe
+              what ships: a GUI subsystem program with no automation module; installer.json points at it.
+          mvn -Pnative -pl vexelray-sim-rigid-demo -am package          ->  target/rigid-sim-debug.exe
+              the debug edition: a console program that ottermate can drive with its automation flag.
+        -->
+        <profile>
+            <id>native</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.graalvm.buildtools</groupId>
+                        <artifactId>native-maven-plugin</artifactId>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>native-release</id>
+            <properties>
+                <edition.src>src/edition-release/java</edition.src>
+                <automation.scope>test</automation.scope>
+                <native.imageName>rigid-sim</native.imageName>
+                <native.subsystem>WINDOWS</native.subsystem>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.graalvm.buildtools</groupId>
+                        <artifactId>native-maven-plugin</artifactId>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <!-- Exactly one activates from the host OS: VexelRay's provider and tactroller's input backend. -->
         <profile>
             <id>platform-windows</id>

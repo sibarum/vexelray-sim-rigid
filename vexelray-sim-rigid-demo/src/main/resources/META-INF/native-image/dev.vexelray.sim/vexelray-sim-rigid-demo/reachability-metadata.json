@@ -1,0 +1,225 @@
+{
+  "reflection": [
+    {
+      "type": "dev.vexelray.sim.rigid.demo.RigidDemo",
+      "jniAccessible": true,
+      "methods": [
+        {
+          "name": "main",
+          "parameterTypes": ["java.lang.String[]"]
+        }
+      ]
+    },
+    {
+      "type": "java.lang.Boolean",
+      "jniAccessible": true,
+      "methods": [
+        {
+          "name": "getBoolean",
+          "parameterTypes": ["java.lang.String"]
+        }
+      ]
+    },
+    {
+      "type": "java.lang.String[]"
+    },
+    {
+      "type": "java.nio.Buffer",
+      "fields": [
+        {
+          "name": "address"
+        },
+        {
+          "name": "capacity"
+        },
+        {
+          "name": "limit"
+        },
+        {
+          "name": "mark"
+        },
+        {
+          "name": "position"
+        }
+      ]
+    },
+    {
+      "type": "java.nio.ByteBuffer",
+      "fields": [
+        {
+          "name": "offset"
+        }
+      ]
+    },
+    {
+      "type": "java.nio.DirectByteBuffer",
+      "unsafeAllocated": true,
+      "fields": [
+        {
+          "name": "att"
+        }
+      ]
+    },
+    {
+      "type": "java.nio.DirectCharBufferU",
+      "unsafeAllocated": true,
+      "fields": [
+        {
+          "name": "att"
+        }
+      ]
+    },
+    {
+      "type": "java.nio.DirectDoubleBufferU",
+      "fields": [
+        {
+          "name": "att"
+        }
+      ]
+    },
+    {
+      "type": "java.nio.DirectFloatBufferU",
+      "unsafeAllocated": true,
+      "fields": [
+        {
+          "name": "att"
+        }
+      ]
+    },
+    {
+      "type": "java.nio.DirectIntBufferU",
+      "unsafeAllocated": true,
+      "fields": [
+        {
+          "name": "att"
+        }
+      ]
+    },
+    {
+      "type": "java.nio.DirectLongBufferU",
+      "unsafeAllocated": true,
+      "fields": [
+        {
+          "name": "att"
+        }
+      ]
+    },
+    {
+      "type": "java.nio.DirectShortBufferU",
+      "fields": [
+        {
+          "name": "att"
+        }
+      ]
+    },
+    {
+      "type": "java.nio.MappedByteBuffer"
+    },
+    {
+      "type": "org.lwjgl.system.jemalloc.JEmallocAllocator"
+    },
+    {
+      "type": "sun.launcher.LauncherHelper",
+      "jniAccessible": true,
+      "fields": [
+        {
+          "name": "isStaticMain"
+        },
+        {
+          "name": "noArgMain"
+        }
+      ],
+      "methods": [
+        {
+          "name": "getApplicationClass",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "sun.misc.Unsafe",
+      "fields": [
+        {
+          "name": "theUnsafe"
+        }
+      ]
+    },
+    {
+      "type": "sun.security.provider.DRBG",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": ["java.security.SecureRandomParameters"]
+        }
+      ]
+    },
+    {
+      "type": "sun.security.provider.SHA",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "sun.security.provider.SHA2$SHA256",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "sun.text.resources.cldr.FormatData"
+    },
+    {
+      "type": "sun.text.resources.cldr.FormatData_en"
+    },
+    {
+      "type": "sun.text.resources.cldr.FormatData_en_US"
+    },
+    {
+      "type": "sun.util.resources.cldr.TimeZoneNames"
+    },
+    {
+      "type": "sun.util.resources.cldr.TimeZoneNames_en"
+    },
+    {
+      "type": "sun.util.resources.cldr.TimeZoneNames_en_US"
+    }
+  ],
+  "resources": [
+    {
+      "glob": "META-INF/services/com.oracle.truffle.api.TruffleRuntimeAccess"
+    },
+    {
+      "glob": "META-INF/services/java.time.zone.ZoneRulesProvider"
+    },
+    {
+      "glob": "META-INF/windows/x64/org/lwjgl/lwjgl.dll.sha1"
+    },
+    {
+      "glob": "dev/supirvast/vastir/tools/native/windows-x64/spirv-as.exe"
+    },
+    {
+      "glob": "dev/supirvast/vastir/tools/native/windows-x64/spirv-cross.exe"
+    },
+    {
+      "glob": "dev/supirvast/vastir/tools/native/windows-x64/spirv-dis.exe"
+    },
+    {
+      "glob": "dev/supirvast/vastir/tools/native/windows-x64/spirv-opt.exe"
+    },
+    {
+      "glob": "dev/supirvast/vastir/tools/native/windows-x64/spirv-val.exe"
+    },
+    {
+      "glob": "vulkan-1.dll"
+    },
+    {
+      "glob": "windows/x64/org/lwjgl/lwjgl.dll"
+    }
+  ]
+}
