@@ -198,7 +198,10 @@ public final class SphereStep implements Buffered {
             }
             passes.addAll(velocity);
         }
-        show = new Pass("show", Spheres.show(), Spheres.SHOW_BUFFERS, List.of(Spheres.SHOW_NAMES), spheres);
+        show = grid == null
+                ? new Pass("show", Spheres.show(), Spheres.SHOW_BUFFERS, List.of(Spheres.SHOW_NAMES), spheres)
+                : new Pass("show", Spheres.show(grid), Spheres.GRID_SHOW_BUFFERS, List.of(Spheres.GRID_SHOW_NAMES),
+                        spheres);
         passes.add(show);
         step = List.copyOf(passes);
     }

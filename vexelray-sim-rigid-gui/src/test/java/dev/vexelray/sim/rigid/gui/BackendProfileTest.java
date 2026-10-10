@@ -103,7 +103,7 @@ class BackendProfileTest {
             kron.tick(now - origin);
             ShownRing.Frame frame = ring.take();
             if (frame != null && world[0] != null && drawing.get()) {
-                view.show(application[0], frame, world[0].phase(now));
+                view.show(application[0], frame, world[0].phase(now), 0);
             }
             if (recording.get()) {
                 synchronized (frameTimes) {

@@ -54,6 +54,8 @@ final class Panel {
                         controls::iterations),
                 new Pick<>("Running", "Speed", Controls.SPEEDS, Controls::speedLabel, controls::speed,
                         controls::speed),
+                new Pick<>("Picture", "Squash", Controls.SQUASHES, g -> g == 0 ? "None" : g + "×",
+                        controls::squash, controls::squash),
                 new Pick<>("Running", "Runs on", List.of(SphereRunner.Backend.values()), b -> b.label,
                         controls::backend, controls::backend));
 

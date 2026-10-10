@@ -190,6 +190,11 @@ final class Scene implements AutoCloseable {
                 runner.floats("qw")[s]};
     }
 
+    /** The picture's buffer as it is on the backend now, {@link Spheres#SHOWN_STRIDE} floats a sphere. */
+    float[] shown() {
+        return runner.floats("shown");
+    }
+
     /** The contact list's counts ({@link Spheres#CONTACT_COUNT_WORDS}), or null where the solve keeps no list. */
     int[] contactCount() {
         return step.buffers().containsKey("contactCount") ? runner.read("contactCount") : null;

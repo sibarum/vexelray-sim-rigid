@@ -1248,32 +1248,141 @@ public final class Spheres {
 
     // --- for a picture -------------------------------------------------------------------------------------
 
-    /** Floats per sphere in {@code shown}: the centre before the step, the radius, the centre after, and one spare. */
-    public static final int SHOWN_STRIDE = 8;
+    /**
+     * Floats per sphere in {@code shown}: the centre before the step, the radius, the centre after, one spare, then the
+     * pressing ({@link #show}) before the step and after it, {@link #PRESSING_WORDS} each.
+     */
+    public static final int SHOWN_STRIDE = 32;
+    /** Where in a sphere's {@code shown} its pressing before the step starts, and after it. */
+    public static final int PRESSED_BEFORE = 8;
+    public static final int PRESSED_AFTER = 20;
+    /**
+     * A pressing's words: the flattening {@code xx, yy, zz, xy, xz, yz}, the lean {@code x, y, z}, the flattening's
+     * trace, the lean's length, and one spare.
+     */
+    public static final int PRESSING_WORDS = 12;
+    public static final int FLATTENING = 0;
+    public static final int LEAN = 6;
+    public static final int TRACE = 9;
+    public static final int LEAN_LENGTH = 10;
 
-    static final String[] SHOW_NAMES = {"x", "y", "z", "r", "shown"};
+    static final String[] SHOW_NAMES = {"x", "y", "z", "r", "params", "shown"};
     static final List<Buffer> SHOW_BUFFERS = bind(SHOW_NAMES);
+    static final String[] GRID_SHOW_NAMES = {"x", "y", "z", "r", "params", "shown", "keys", "starts", "order"};
+    static final List<Buffer> GRID_SHOW_BUFFERS = bind(GRID_SHOW_NAMES, 6);
+
+    /** {@link #show(SphereGrid)} testing every sphere against every other, for a step with no grid. */
+    public static Function show() {
+        return show(null);
+    }
 
     /**
      * One invocation per sphere, at the end of a step: the centre the last step ended on moved to the "before" slot
-     * of {@code shown}, and the centre this one ended on put in the "after" slot, with the radius. A picture blends
-     * the two by how far the frame is between the steps, and reads one buffer to do it.
+     * of {@code shown}, and the centre this one ended on put in the "after" slot, with the radius; likewise the
+     * sphere's pressing. A picture blends the two by how far the frame is between the steps, and reads one buffer to
+     * do it.
+     *
+     * <p>The pressing is what the overlaps left at the end of the step would do to a sphere that could give, for a
+     * picture to squash it by: nothing in the solve reads it. Each overlap, with a sphere or a wall, flattens the
+     * sphere along the contact's normal {@code n}, outward, by {@code f}, its share of the overlap as a share of its
+     * radius. Between two spheres the share is the sphere's side of the point dividing the centre line at the radii,
+     * where friction acts, which makes {@code f} the overlap over the sum of the radii; a wall takes all of it. The
+     * flattening is {@code Σ f n nᵀ}, symmetric, and the lean {@code Σ f n}, the way the contacts press from.
+     *
+     * <p>With a grid, a sphere looks in the cells it was sorted into for the last substep, which finds every overlap
+     * unless the solve moved a pair across a whole cell after the sort.
      */
-    public static Function show() {
-        List<Buffer> bs = SHOW_BUFFERS;
+    public static Function show(SphereGrid grid) {
+        List<Buffer> bs = grid == null ? SHOW_BUFFERS : GRID_SHOW_BUFFERS;
         Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
         Buffer radius = bs.get(3);
-        Buffer shown = bs.get(4);
+        Buffer params = bs.get(4);
+        Buffer shown = bs.get(5);
 
         Body b = new Body();
         LocalVar s = b.let("s", new Expr.InvocationId());
         b.when(lt(v(s), new Expr.InvocationCount()), t -> {
             LocalVar base = t.let("base", mul(v(s), i(SHOWN_STRIDE)));
+            LocalVar[] mine = new LocalVar[3];
             for (int a = 0; a < 3; a++) {
+                mine[a] = t.let("c", load(at[a], v(s)));
                 t.store(shown, add(v(base), i(a)), load(shown, add(v(base), i(4 + a))));
-                t.store(shown, add(v(base), i(4 + a)), load(at[a], v(s)));
+                t.store(shown, add(v(base), i(4 + a)), v(mine[a]));
             }
-            t.store(shown, add(v(base), i(3)), load(radius, v(s)));
+            LocalVar rs = t.let("rs", load(radius, v(s)));
+            t.store(shown, add(v(base), i(3)), v(rs));
+            for (int k = 0; k < PRESSING_WORDS; k++) {
+                t.store(shown, add(v(base), i(PRESSED_BEFORE + k)), load(shown, add(v(base), i(PRESSED_AFTER + k))));
+            }
+
+            // xx, yy, zz, xy, xz, yz, then the lean.
+            LocalVar[] flat = new LocalVar[6];
+            for (int k = 0; k < 6; k++) {
+                flat[k] = t.let("flat", f(0));
+            }
+            LocalVar[] lean = {t.let("lx", f(0)), t.let("ly", f(0)), t.let("lz", f(0))};
+
+            // A wall: the outward normal is ±e_a, so it adds f to the diagonal and ±f to the lean.
+            int[] extent = {SX, SY, SZ};
+            for (int a = 0; a < 3; a++) {
+                int axis = a;
+                LocalVar low = t.let("low", sub(v(rs), v(mine[a])));
+                LocalVar high = t.let("high", sub(add(v(mine[a]), v(rs)), load(params, i(extent[a]))));
+                for (LocalVar depth : new LocalVar[] {low, high}) {
+                    float side = depth == low ? -1 : 1;
+                    t.when(gt(v(depth), f(0)), pressed -> {
+                        LocalVar share = pressed.let("share", div(v(depth), v(rs)));
+                        pressed.set(flat[axis], add(v(flat[axis]), v(share)));
+                        pressed.set(lean[axis], add(v(lean[axis]), mul(f(side), v(share))));
+                    });
+                }
+            }
+
+            // Another sphere: f n nᵀ is g d dᵀ, with d to the other's centre and g = f / |d|².
+            BiConsumer<Body, LocalVar> against = (body, o) -> body.when(not(eq(v(o), v(s))), other -> {
+                LocalVar[] d = new LocalVar[3];
+                for (int a = 0; a < 3; a++) {
+                    d[a] = other.let("d", sub(load(at[a], v(o)), v(mine[a])));
+                }
+                LocalVar d2 = other.let("d2", dot(d, d));
+                LocalVar reach = other.let("reach", add(v(rs), load(radius, v(o))));
+                other.when(and(lt(v(d2), mul(v(reach), v(reach))), gt(v(d2), f(COINCIDENT))), touching -> {
+                    LocalVar dist = touching.let("dist", sqrt(v(d2)));
+                    LocalVar share = touching.let("share", div(sub(v(reach), v(dist)), v(reach)));
+                    LocalVar g = touching.let("g", div(v(share), v(d2)));
+                    LocalVar along = touching.let("along", div(v(share), v(dist)));
+                    int[][] pairs = {{0, 0}, {1, 1}, {2, 2}, {0, 1}, {0, 2}, {1, 2}};
+                    for (int k = 0; k < 6; k++) {
+                        touching.set(flat[k], add(v(flat[k]), mul(v(g), mul(v(d[pairs[k][0]]), v(d[pairs[k][1]])))));
+                    }
+                    for (int a = 0; a < 3; a++) {
+                        touching.set(lean[a], add(v(lean[a]), mul(v(along), v(d[a]))));
+                    }
+                });
+            });
+            if (grid == null) {
+                LocalVar o = t.let("o", i(0));
+                t.loop(lt(v(o), new Expr.InvocationCount()), next -> {
+                    against.accept(next, o);
+                    next.set(o, add(v(o), i(1)));
+                });
+            } else {
+                LocalVar key = t.let("key", load(bs.get(6), v(s)));
+                LocalVar ix = t.let("ix", mod(v(key), i(grid.nx())));
+                LocalVar iy = t.let("iy", mod(div(v(key), i(grid.nx())), i(grid.ny())));
+                LocalVar iz = t.let("iz", div(v(key), i(grid.nx() * grid.ny())));
+                around(t, grid, ix, iy, iz, bs.get(7), bs.get(8), against);
+            }
+
+            LocalVar after = t.let("after", add(v(base), i(PRESSED_AFTER)));
+            for (int k = 0; k < 6; k++) {
+                t.store(shown, add(v(after), i(FLATTENING + k)), v(flat[k]));
+            }
+            for (int a = 0; a < 3; a++) {
+                t.store(shown, add(v(after), i(LEAN + a)), v(lean[a]));
+            }
+            t.store(shown, add(v(after), i(TRACE)), add(add(v(flat[0]), v(flat[1])), v(flat[2])));
+            t.store(shown, add(v(after), i(LEAN_LENGTH)), sqrt(dot(lean, lean)));
         });
         return function("spheresShow", b);
     }

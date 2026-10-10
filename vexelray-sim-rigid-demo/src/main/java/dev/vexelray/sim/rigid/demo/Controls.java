@@ -44,6 +44,12 @@ final class Controls {
     /** Restitution: how much of a contact's closing speed it parts at. */
     static final List<Double> RESTITUTIONS = List.of(0.0, 0.3, 0.6, 0.9);
 
+    /**
+     * How much the picture squashes a sphere by what presses it: none, its overlaps just closed, and twice and four
+     * times that. Only the picture: the solve never sees it.
+     */
+    static final List<Double> SQUASHES = List.of(0.0, 1.5, 3.0, 6.0);
+
     static final List<Integer> SUBSTEPS = List.of(1, 2, 5, 10, 20, 40);
     static final List<Integer> ITERATIONS = List.of(1, 2, 5, 10);
 
@@ -51,6 +57,7 @@ final class Controls {
     private Solver solver = Solver.AVERAGED;
     private SphereStep.Solve solve = SphereStep.Solve.JACOBI;
     private double restitution;
+    private double squash = 3.0;
     private int substeps = 10;
     private int iterations = 1;
     private SphereRunner.Backend backend = SphereRunner.Backend.QUEUE;
@@ -100,6 +107,15 @@ final class Controls {
 
     synchronized void restitution(Double e) {
         restitution = e;
+        version++;
+    }
+
+    synchronized double squash() {
+        return squash;
+    }
+
+    synchronized void squash(Double g) {
+        squash = g;
         version++;
     }
 

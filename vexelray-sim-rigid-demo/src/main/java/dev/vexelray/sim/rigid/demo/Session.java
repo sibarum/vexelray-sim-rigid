@@ -80,7 +80,7 @@ final class Session implements AutoCloseable {
         ShownRing.Frame frame = ring.take();
         if (frame != null) {
             long start = System.nanoTime();
-            ui.view().show(app, frame, world.phase(start));
+            ui.view().show(app, frame, world.phase(start), controls.squash());
             double ms = (System.nanoTime() - start) / 1e6;
             drawMillis = drawMillis == 0 ? ms : 0.9 * drawMillis + 0.1 * ms;
         }

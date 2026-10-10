@@ -35,6 +35,7 @@ import static dev.supirvast.vastir.build.Body.input;
 import static dev.supirvast.vastir.build.Body.load;
 import static dev.supirvast.vastir.build.Body.lt;
 import static dev.supirvast.vastir.build.Body.max;
+import static dev.supirvast.vastir.build.Body.min;
 import static dev.supirvast.vastir.build.Body.mix;
 import static dev.supirvast.vastir.build.Body.mul;
 import static dev.supirvast.vastir.build.Body.neg;
@@ -59,6 +60,13 @@ import static dev.supirvast.vastir.build.Body.vec4;
  * takes from Kronometer's {@code Handoff.phase}: the picture shows the state one step behind the frame, smoothly, at
  * any refresh rate. The floor inside the box is a checker, so motion across it reads; outside, the picture is sky.
  *
+ * <p>A sphere is drawn squashed by what presses it, as {@code Spheres.show} measured it: an ellipsoid of the sphere's
+ * volume, flattened along the contacts by the push constant {@code squash} times the overlaps, as shares of the
+ * radius. At 1.5 the flattening, less the bulge that keeps the volume, closes an overlap, so spheres that overlap
+ * look pressed together instead; past it a sphere is moved to keep touching what it presses on. Every sphere is still
+ * tested by one quadratic, of a sphere that bounds the squashed one, and only those met nearer than anything yet are
+ * tested as squashed.
+ *
  * <p>Coordinates are the simulation's: metres, {@code y} up, the box from the origin to {@code (sx, sy, sz)}. The
  * camera arrives as an eye and three axes, which the host works out from its orbit.
  */
@@ -69,12 +77,19 @@ final class SphereShader {
 
     /** The push-constant block, all f32, in this order. */
     private static final String[] MEMBERS = {"ex", "ey", "ez", "rx", "ry", "rz", "ux", "uy", "uz", "fx", "fy", "fz",
-            "aspect", "alpha", "count", "sx", "sy", "sz"};
+            "aspect", "alpha", "count", "sx", "sy", "sz", "squash"};
 
     static final int PUSH_BYTES = MEMBERS.length * Float.BYTES;
 
     /** Half the picture's height at unit distance: a vertical field of view of about 53°. */
     static final double TAN_HALF = 0.5;
+
+    /**
+     * The most a sphere is squashed by: the gain times its flattening's trace is held to this, which keeps
+     * {@code I − g F} well inside positive, and lets a sphere of radius {@code r (1 + 0.53 g tr F)} bound the squashed
+     * one, since {@code det(I − g F) ≥ 1 − g tr F} and {@code (1 − x)^(−1/3) ≤ 1 + 0.53 x} up to {@code x = ½}.
+     */
+    private static final double MOST_SQUASH = 0.5;
 
     /** The floor's checker, in metres. */
     private static final double CHECKER = 0.05;
@@ -120,10 +135,12 @@ final class SphereShader {
             b.set(d[a], mul(v(d[a]), v(inverse)));
         }
 
-        // The nearest sphere the ray meets: |e + t d − c|² = r², the smaller root, in front of the eye.
+        // The nearest sphere the ray meets, squashed: first the sphere that bounds it, then, if that is met nearer
+        // than anything yet, the squashed sphere itself.
+        LocalVar squash = b.let("squash", pushed(PUSH, 18));
         LocalVar best = b.let("best", f(1e30));
         LocalVar hit = b.let("hit", f(-1));
-        LocalVar[] centre = {b.let("hx", f(0)), b.let("hy", f(0)), b.let("hz", f(0))};
+        LocalVar[] normal = {b.let("nx", f(0)), b.let("ny", f(0)), b.let("nz", f(0))};
         LocalVar k = b.let("k", i(0));
         b.loop(lt(v(k), v(count)), pass -> {
             LocalVar base = pass.let("base", mul(v(k), i(Spheres.SHOWN_STRIDE)));
@@ -134,17 +151,20 @@ final class SphereShader {
                 o[a] = pass.let("o", sub(v(eye[a]), v(c[a])));
             }
             LocalVar r = pass.let("r", load(SHOWN, add(v(base), i(3))));
+            LocalVar trace = pass.let("trace", pressing(base, Spheres.TRACE, alpha));
+            LocalVar leanLength = pass.let("leanLength", pressing(base, Spheres.LEAN_LENGTH, alpha));
+            LocalVar gain = pass.let("gain", min(v(squash), div(f(MOST_SQUASH), max(v(trace), f(1e-9)))));
+            LocalVar lift = pass.let("lift", max(f(0), sub(mul(v(gain), f(2.0 / 3)), f(1))));
+            LocalVar bound = pass.let("bound", add(mul(v(r), add(f(1), mul(f(0.53), mul(v(gain), v(trace))))),
+                    mul(v(lift), mul(v(r), v(leanLength)))));
             LocalVar half = pass.let("half", dot(o, d));
-            LocalVar disc = pass.let("disc", sub(mul(v(half), v(half)), sub(dot(o, o), mul(v(r), v(r)))));
+            LocalVar disc = pass.let("disc", sub(mul(v(half), v(half)), sub(dot(o, o), mul(v(bound), v(bound)))));
             pass.when(gt(v(disc), f(0)), meets -> {
-                LocalVar t = meets.let("t", sub(neg(v(half)), sqrt(v(disc))));
-                meets.when(and(gt(v(t), f(0)), lt(v(t), v(best))), nearer -> {
-                    nearer.set(best, v(t));
-                    nearer.set(hit, toFloat(v(k)));
-                    for (int a = 0; a < 3; a++) {
-                        nearer.set(centre[a], v(c[a]));
-                    }
-                });
+                LocalVar root = meets.let("root", sqrt(v(disc)));
+                Expr ahead = gt(sub(v(root), v(half)), f(0));
+                Expr sooner = lt(sub(neg(v(half)), v(root)), v(best));
+                meets.when(and(ahead, sooner), near -> squashed(near, k, base, c, r, gain, lift, eye, d, alpha,
+                        best, hit, normal));
             });
             pass.set(k, add(v(k), i(1)));
         });
@@ -175,10 +195,7 @@ final class SphereShader {
 
         // A sphere: lit from one side, with a little from everywhere, and a highlight.
         b.when(gt(v(hit), f(-0.5)), ball -> {
-            LocalVar[] n = new LocalVar[3];
-            for (int a = 0; a < 3; a++) {
-                n[a] = ball.let("n", sub(add(v(eye[a]), mul(v(best), v(d[a]))), v(centre[a])));
-            }
+            LocalVar[] n = normal;
             LocalVar nl = ball.let("nl", div(f(1), sqrt(dot(n, n))));
             for (int a = 0; a < 3; a++) {
                 ball.set(n[a], mul(v(n[a]), v(nl)));
@@ -217,9 +234,11 @@ final class SphereShader {
      * @param right   the camera's right, unit length; likewise {@code up} and {@code forward}
      * @param alpha   how far between the last two steps to show the spheres, 0 to 1
      * @param extent  the box, {@code sx, sy, sz}
+     * @param squash  how much a sphere is squashed by what presses it: 0 for not at all, 1.5 for its overlaps just
+     *                closed, more to exaggerate
      */
     static byte[] push(double[] eye, double[] right, double[] up, double[] forward, double aspect, float alpha,
-                       int count, double[] extent) {
+                       int count, double[] extent, double squash) {
         ByteBuffer bytes = ByteBuffer.allocate(PUSH_BYTES).order(ByteOrder.LITTLE_ENDIAN);
         for (double[] vector : new double[][] {eye, right, up, forward}) {
             for (double component : vector) {
@@ -230,7 +249,94 @@ final class SphereShader {
         for (double e : extent) {
             bytes.putFloat((float) e);
         }
+        bytes.putFloat((float) squash);
         return bytes.array();
+    }
+
+    /**
+     * Sphere {@code k}, squashed, met by the ray if it is: kept as the nearest, with its normal, if nearer than
+     * {@code best}.
+     *
+     * <p>The squashed sphere is {@code c' + M u} for {@code |u| ≤ r}, with {@code M = s (I − g F)}: {@code F} the
+     * flattening, {@code g} the gain, and {@code s = det(I − g F)^(−1/3)}, so the volume is the sphere's. The ray is
+     * taken into {@code u}'s space by {@code M⁻¹}, where the shape is the sphere again and a quadratic finds it, and
+     * the normal there, {@code u}, comes back as {@code M⁻¹ u}, since {@code M} is symmetric. {@code M⁻¹} is
+     * {@code adj(I − g F) / det · s⁻¹}, and {@code s⁻¹}, the cube root of the determinant, two Newton steps from
+     * {@code 1 − g tr F / 3}, which is right to first order already.
+     *
+     * <p>{@code c'} is the centre moved {@code lift · r} along the lean: squashed about its centre by more than the
+     * overlap, a sphere would draw back from what it presses on, and is moved to meet it.
+     */
+    private static void squashed(Body b, LocalVar k, LocalVar base, LocalVar[] c, LocalVar r, LocalVar gain,
+                                 LocalVar lift, LocalVar[] eye, LocalVar[] d, LocalVar alpha, LocalVar best,
+                                 LocalVar hit, LocalVar[] normal) {
+        // I − g F, as xx, yy, zz, xy, xz, yz.
+        LocalVar[] m = new LocalVar[6];
+        for (int j = 0; j < 6; j++) {
+            Expr pressed = mul(v(gain), pressing(base, Spheres.FLATTENING + j, alpha));
+            m[j] = b.let("m", j < 3 ? sub(f(1), pressed) : neg(pressed));
+        }
+        LocalVar[] adj = {
+                b.let("adj", sub(mul(v(m[1]), v(m[2])), mul(v(m[5]), v(m[5])))),
+                b.let("adj", sub(mul(v(m[0]), v(m[2])), mul(v(m[4]), v(m[4])))),
+                b.let("adj", sub(mul(v(m[0]), v(m[1])), mul(v(m[3]), v(m[3])))),
+                b.let("adj", sub(mul(v(m[4]), v(m[5])), mul(v(m[3]), v(m[2])))),
+                b.let("adj", sub(mul(v(m[3]), v(m[5])), mul(v(m[4]), v(m[1])))),
+                b.let("adj", sub(mul(v(m[3]), v(m[4])), mul(v(m[0]), v(m[5]))))};
+        LocalVar det = b.let("det", add(mul(v(m[0]), v(adj[0])), add(mul(v(m[3]), v(adj[3])),
+                mul(v(m[4]), v(adj[4])))));
+        LocalVar cube = b.let("cube", sub(f(1), div(sub(f(3), add(v(m[0]), add(v(m[1]), v(m[2])))), f(3))));
+        for (int step = 0; step < 2; step++) {
+            b.set(cube, div(add(mul(f(2), v(cube)), div(v(det), mul(v(cube), v(cube)))), f(3)));
+        }
+        LocalVar scale = b.let("scale", div(v(cube), v(det)));
+        LocalVar[] inverse = new LocalVar[6];
+        for (int j = 0; j < 6; j++) {
+            inverse[j] = b.let("inv", mul(v(adj[j]), v(scale)));
+        }
+
+        LocalVar[] o = new LocalVar[3];
+        for (int a = 0; a < 3; a++) {
+            Expr moved = add(v(c[a]), mul(mul(v(lift), v(r)), pressing(base, Spheres.LEAN + a, alpha)));
+            o[a] = b.let("o", sub(v(eye[a]), moved));
+        }
+        LocalVar[] os = times(b, inverse, o);
+        LocalVar[] ds = times(b, inverse, d);
+        LocalVar aa = b.let("aa", dot(ds, ds));
+        LocalVar hh = b.let("hh", dot(os, ds));
+        LocalVar disc = b.let("disc", sub(mul(v(hh), v(hh)), mul(v(aa), sub(dot(os, os), mul(v(r), v(r))))));
+        b.when(gt(v(disc), f(0)), meets -> {
+            LocalVar t = meets.let("t", div(sub(neg(v(hh)), sqrt(v(disc))), v(aa)));
+            meets.when(and(gt(v(t), f(0)), lt(v(t), v(best))), nearer -> {
+                nearer.set(best, v(t));
+                nearer.set(hit, toFloat(v(k)));
+                LocalVar[] u = new LocalVar[3];
+                for (int a = 0; a < 3; a++) {
+                    u[a] = nearer.let("u", add(v(os[a]), mul(v(t), v(ds[a]))));
+                }
+                LocalVar[] n = times(nearer, inverse, u);
+                for (int a = 0; a < 3; a++) {
+                    nearer.set(normal[a], v(n[a]));
+                }
+            });
+        });
+    }
+
+    /** Word {@code word} of sphere {@code base}'s pressing, blended between the steps as its centre is. */
+    private static Expr pressing(LocalVar base, int word, LocalVar alpha) {
+        return mix(load(SHOWN, add(v(base), i(Spheres.PRESSED_BEFORE + word))),
+                load(SHOWN, add(v(base), i(Spheres.PRESSED_AFTER + word))), v(alpha));
+    }
+
+    /** The symmetric {@code m}, as xx, yy, zz, xy, xz, yz, times {@code x}. */
+    private static LocalVar[] times(Body b, LocalVar[] m, LocalVar[] x) {
+        int[][] row = {{0, 3, 4}, {3, 1, 5}, {4, 5, 2}};
+        LocalVar[] y = new LocalVar[3];
+        for (int a = 0; a < 3; a++) {
+            y[a] = b.let("mx", add(mul(v(m[row[a][0]]), v(x[0])), add(mul(v(m[row[a][1]]), v(x[1])),
+                    mul(v(m[row[a][2]]), v(x[2])))));
+        }
+        return y;
     }
 
     private static Expr dot(LocalVar[] a, LocalVar[] b) {

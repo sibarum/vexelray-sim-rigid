@@ -275,6 +275,21 @@ contacts a step unsolved on the pile of 4096.
         about the same rate, so it is not friction's convergence. Next to look at, before rolling resistance: a
         contact that a substep corrects by nothing, because an earlier contact in the order has parted it, has
         `λₙ = 0` and no friction that substep, whatever weight it carries.
+- [x] **Spheres squashed by what presses them** (2026-10-09), in the picture only. `Spheres.show` measures each
+      sphere's overlaps at the end of a step, with spheres and walls, as a flattening `Σ f n nᵀ` and a lean `Σ f n`,
+      `f` the sphere's share of the overlap over its radius; `shown` grows to 32 floats a sphere to hold them before
+      and after the step. The shader draws an ellipsoid of the sphere's volume, `s (I − g F)`, `g` the demo's Squash
+      (0, 1.5, 3, 6; 3 by default): at 1.5 the flattening closes an overlap, past it the centre moves along the lean
+      to keep touching. Every sphere is still one quadratic, of a sphere that bounds the squashed one, and only those
+      nearer than anything yet are solved as squashed. `PressingTest`, both backends and both solves: fixed spheres
+      in each other and the walls press as the host works out, to 1e-6. In the demo a column under Jacobi squashes
+      more the lower it is, as its overlaps do. The picture of the pile of 1000 took 3.1–4.0 ms before, 3.8 at
+      Squash 0 and 4.1–4.4 at 3, in runs whose step was not sharing the GPU heavily.
+
+      **What it does not show: a sphere on the floor.** Both solves project onto the walls exactly, so a sphere free
+      to move ends a step with no wall overlap, and the floor never squashes it; only spheres do. Squashing by load
+      rather than overlap — the normal moves a contact made over the step, as a force — would show a ball's weight
+      and an impact on the floor, at the cost of every contact pass summing them.
 - [ ] **Boxes**: orientation, a contact manifold, and stacking measured the way the column is.
 - [ ] **Fixed point against f32**, as the fluid's scatter was measured. The velocity finding above is a reason to
       look: f32 positions already cost something here.

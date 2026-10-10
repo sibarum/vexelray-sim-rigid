@@ -50,8 +50,10 @@ public final class SphereView implements AutoCloseable {
      * Draws {@code frame}'s step, each sphere blended {@code alpha} of the way from where the step before it left the
      * sphere to where it did. Waits for the draw, as {@code renderInto} does, and for nothing else: the step's
      * timeline has already reached the value the draw waits for.
+     *
+     * @param squash how much each sphere is squashed by what presses it, as {@link SphereShader#push} takes it
      */
-    public void show(GuiApp app, ShownRing.Frame frame, float alpha) {
+    public void show(GuiApp app, ShownRing.Frame frame, float alpha, double squash) {
         BoundStorageBuffer slot = bind(app, frame);
         ShownRing.Generation g = frame.generation();
         double[] extent = {g.extent(0), g.extent(1), g.extent(2)};
@@ -65,7 +67,7 @@ public final class SphereView implements AutoCloseable {
         // right looking down +z. The other sign mirrors the picture, and a drag then seems to turn the wrong way.
         double[] right = normalise(forward[2], 0, -forward[0]);
         double[] up = cross(forward, right);
-        byte[] push = SphereShader.push(eye, right, up, forward, 1.0, alpha, g.spheres(), extent);
+        byte[] push = SphereShader.push(eye, right, up, forward, 1.0, alpha, g.spheres(), extent, squash);
         target.renderInto(pipeline, 0L, slot.descriptorSet(), 3, push, 0f, 0f, 0f, 1f, g.timeline(), frame.step());
     }
 
