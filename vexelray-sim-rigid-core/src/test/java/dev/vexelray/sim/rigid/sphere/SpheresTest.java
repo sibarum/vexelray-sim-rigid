@@ -1,6 +1,8 @@
 package dev.vexelray.sim.rigid.sphere;
 
 import dev.vexelray.sim.rigid.sphere.Scene.Backend;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -24,13 +26,33 @@ class SpheresTest {
                 .map(solve -> Arguments.of(backend, solve)));
     }
 
+    /** {@link #everySolve} but Gauss–Seidel on the CPU, whose fall through a 10 m box is the slow one. */
+    static Stream<Arguments> fallingQuickly() {
+        return everySolve().filter(a -> !(a.get()[0] == Backend.CPU
+                && a.get()[1] == SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT));
+    }
+
     /**
      * Unconstrained, a substep is symplectic Euler, whose discrete answer is exact: after {@code k} substeps of
      * {@code h}, {@code v = −g h k} and {@code y = y₀ − g h² k(k + 1) / 2}.
      */
     @ParameterizedTest
-    @MethodSource("everySolve")
+    @MethodSource("fallingQuickly")
     void aFallingSphereFollowsSymplecticEulerExactly(Backend backend, SphereStep.Solve solve) {
+        fall(backend, solve);
+    }
+
+    /**
+     * The same, Gauss–Seidel on the CPU, with {@code -Pphysics}: the box's grid is 50³ cells, sorted every substep,
+     * which takes seconds on the CPU to show again what the other three cases show.
+     */
+    @Test
+    @Tag("physics")
+    void aFallingSphereFollowsSymplecticEulerExactlyUnderGaussSeidelOnTheCpu() {
+        fall(Backend.CPU, SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT);
+    }
+
+    private static void fall(Backend backend, SphereStep.Solve solve) {
         try (Scene scene = new Scene(1).uniform(0.1, 1)) {
             scene.sx = scene.sy = scene.sz = 10;
             scene.x[0] = scene.z[0] = 5;

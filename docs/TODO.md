@@ -7,7 +7,7 @@ sphere solves its own contacts against the positions as they stood (Jacobi), so 
 with no atomics. There is no rotation, so no friction, and no restitution. `Spheres`' Javadoc
 has the details.
 
-**What holds** (`SpheresTest` on every build, `PileTest` with `-Pphysics`, on the CPU and the GPU):
+**What holds** (`SpheresTest` on every build but its slowest case, `PileTest` with `-Pphysics`, on the CPU and the GPU):
 
 - A free fall is symplectic Euler's to f32 precision.
 - A sphere dropped on the floor rests on it.

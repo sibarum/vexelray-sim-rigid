@@ -49,7 +49,8 @@ mvn install
 ```
 
 Runs the tests that take seconds; add `-Dsupirvast.requireGpu=true` to fail rather than skip where there is no GPU.
-Tests that run seconds of simulated time and judge what the bodies did run only with `-Pphysics`. The sweep that
+Tests that run seconds of simulated time and judge what the bodies did run only with `-Pphysics`, as do those that
+take seconds to repeat what a faster case already shows, and `PhysicsThreadTest`, which opens a window. The sweep that
 measures the solvers is not an assertion, and runs only with `-Drigid.sweep=true` (on the GPU, or on the CPU with
 `-Drigid.backend=CPU`). The profile of the backends against the frame, `BackendProfileTest`, runs only with
 `-Drigid.profile=true`, and takes a couple of minutes.

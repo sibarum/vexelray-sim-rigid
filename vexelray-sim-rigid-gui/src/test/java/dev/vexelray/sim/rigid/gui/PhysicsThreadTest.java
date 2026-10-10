@@ -10,6 +10,7 @@ import dev.vexelray.sim.core.gui.AppCompute;
 import dev.vexelray.sim.rigid.sphere.SphereGrid;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
 import dev.vexelray.sim.rigid.sphere.Spheres;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.util.Random;
@@ -27,7 +28,9 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  * on drawing: every step solves every contact, steps run back to back, and a step cut into slices is the same step.
  *
  * <p>Needs a Vulkan device with a compute-only queue family; this is an integration test, not a unit test.
+ * It opens a window, so it runs only with {@code -Pphysics}.
  */
+@Tag("physics")
 class PhysicsThreadTest {
 
     private static final int SIDE = 10;
