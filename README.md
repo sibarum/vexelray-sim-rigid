@@ -4,6 +4,8 @@ Rigid-body simulation for VexelRay: bodies, contact and constraints. It uses the
 [vexelray-sim-fluid](../vexelray-sim-fluid): dynamics written in SupirVast IR, and one source that runs on both the
 GPU and the CPU.
 
+**Try it:** the Rigid Sim demo installs on Windows with the other VexelRay applications, from [sibarum.github.io](https://sibarum.github.io/).
+
 As with the fluid, the work is a series of experiments: each technique is built far enough to be measured, and the
 implementation is chosen from the results. [docs/architecture.md](docs/architecture.md) says where it sits;
 [docs/TODO.md](docs/TODO.md) has what has been measured so far and what comes next.
