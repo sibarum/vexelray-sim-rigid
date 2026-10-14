@@ -98,4 +98,8 @@ tried.
 
 `installer.json` describes a per-user install of the release edition through
 [`vexelray-installer`](https://github.com/sibarum/vexelray-installer), as the fluid demo's does: `rigid-sim.exe` with
-its icon, Start menu and desktop shortcuts and an Apps entry. The installer scripts are not generated yet.
+its icon, Start menu and desktop shortcuts and an Apps entry. The installer scripts and the binaries are published
+from [`vexelray-dist`](https://github.com/sibarum/vexelray-dist) (`apps/rigid-sim/`, releases tagged
+`rigid-sim-v<version>`), and its [DEPLOYING.md](https://github.com/sibarum/vexelray-dist/blob/main/DEPLOYING.md) says
+how a release goes out. The install page, with the one-liner, is
+<https://sibarum.github.io/vexelray-framework/install/>.
