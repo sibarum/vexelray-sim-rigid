@@ -31,7 +31,7 @@ final class Recipes {
 
     @Provides
     Appearance look() {
-        return Appearance.of(DemoLook.THEME, Length.em(60), Length.em(36));
+        return Appearance.of(DemoLook.THEME, Length.rem(60), Length.rem(36));
     }
 
     /** What the user has asked for, held until the next frame takes it. */
