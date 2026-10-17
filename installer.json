@@ -18,7 +18,8 @@
         "source": "vexelray-sim-rigid-demo/target/rigid-sim.exe",
         "icon": "vexelray-sim-rigid-demo/src/main/rc/rigid-sim.ico",
         "shortcuts": { "desktop": true, "startMenu": true, "label": "Rigid Sim" }
-      }
+      },
+      { "name": "notices", "source": "THIRD-PARTY-NOTICES.txt" }
     ]
   }
 }
