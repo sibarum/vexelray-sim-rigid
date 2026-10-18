@@ -33,6 +33,41 @@ enum Scenario {
         }
     },
 
+    HEAP("Heap on a bed", "A tall, narrow stack dropped on a floor of fixed spheres, as granular experiments glue"
+            + " grains to theirs, so that a sphere cannot roll away without climbing. With friction, under"
+            + " Gauss–Seidel, it stands as a tall, steep heap; with none, or under Jacobi, which has no friction, it"
+            + " slumps into a lower, ragged mound. On a smooth floor it spreads flat either way: friction does not stop"
+            + " a sphere rolling, and nothing here resists rolling yet.") {
+        @Override
+        State start() {
+            int side = 5;
+            int layers = 14;
+            int bed = 20;
+            double radius = 0.03;
+            double width = bed * 2 * radius;
+            double pitch = 2.2 * radius;
+            State s = new State(bed * bed + side * side * layers, width, 1.6, width);
+            int k = 0;
+            for (int i = 0; i < bed; i++) {
+                for (int l = 0; l < bed; l++, k++) {
+                    s.place(k, radius + 2 * radius * i, radius, radius + 2 * radius * l, radius, 0.1);
+                    s.im[k] = 0;
+                }
+            }
+            Random random = new Random(11);
+            double margin = (width - pitch * (side - 1)) / 2;
+            for (int j = 0; j < layers; j++) {
+                for (int i = 0; i < side; i++) {
+                    for (int l = 0; l < side; l++, k++) {
+                        s.place(k, margin + pitch * i + 0.2 * radius * random.nextDouble(), 3.2 * radius + pitch * j,
+                                margin + pitch * l + 0.2 * radius * random.nextDouble(), radius, 0.1);
+                    }
+                }
+            }
+            return s;
+        }
+    },
+
     BALLS("Bouncing balls", "Twelve balls dropped from different heights. Each rises to e² of its fall; at no"
             + " restitution they land and stay.") {
         @Override

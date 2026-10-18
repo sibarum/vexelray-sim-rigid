@@ -34,7 +34,9 @@ demo offers both, on the grid, and Gauss–Seidel there runs until every contact
 orientation, and Gauss–Seidel's contacts have Coulomb friction: a sliding sphere settles into rolling at 5/7 of its
 speed, and one on a slope rolls or slides as theory says. A pile with friction rests: each contact keeps what it
 took from one substep to the next and starts from it, and friction waits until every contact is parted.
-Contacts bounce as much as the restitution asked for.
+Contacts bounce as much as the restitution asked for. The demo sets friction too, and drops a heap on a bed of
+fixed spheres: a sphere rolls, and friction does not stop it, so a heap needs a rough floor until rolling resistance
+is built.
 
 The physics timing in [docs/physics-timing.md](docs/physics-timing.md) is built: every contact solved every step,
 physics on a second Vulkan queue and a thread of its own, finished steps handed to the frame through a ring, and a

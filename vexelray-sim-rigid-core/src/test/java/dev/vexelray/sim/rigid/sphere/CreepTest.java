@@ -132,6 +132,104 @@ class CreepTest {
         return s.ax[k] * s.ax[k] + s.ay[k] * s.ay[k] + s.az[k] * s.az[k];
     }
 
+    /**
+     * A tower stacked square, layer on layer, in a box a little wider than it: without friction each layer falls into
+     * the hollows of the one below and the tower slumps; with it, the question is whether it stands.
+     */
+    @Test
+    void towerInABox() {
+        int side = Integer.getInteger("rigid.side", 4);
+        int layers = Integer.getInteger("rigid.layers", 12);
+        double r = 0.03;
+        double gap = Double.parseDouble(System.getProperty("rigid.gap", "0.002"));
+        try (Scene scene = new Scene(side * side * layers).uniform(r, 0.1)) {
+            scene.solve = SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT;
+            scene.muStatic = scene.muKinetic = Double.parseDouble(System.getProperty("rigid.mu", "0.5"));
+            double width = side * 2 * r + Double.parseDouble(System.getProperty("rigid.slack", "0.01"));
+            scene.sx = scene.sz = width;
+            scene.sy = layers * 2 * r + 0.5;
+            double pitch = 2 * r + gap;
+            double jitter = Double.parseDouble(System.getProperty("rigid.jitter", "0.004"));
+            Random random = new Random(3);
+            double margin = (width - pitch * (side - 1)) / 2;
+            int k = 0;
+            for (int j = 0; j < layers; j++) {
+                for (int i = 0; i < side; i++) {
+                    for (int l = 0; l < side; l++, k++) {
+                        scene.x[k] = (float) (margin + pitch * i + jitter * (random.nextDouble() - 0.5));
+                        scene.y[k] = (float) (r + pitch * j);
+                        scene.z[k] = (float) (margin + pitch * l + jitter * (random.nextDouble() - 0.5));
+                    }
+                }
+            }
+            scene.start(BACKEND);
+            for (int t = 1; t <= 5; t++) {
+                scene.advanceSeconds(1);
+                SphereDiagnostics state = scene.diagnostics();
+                float top = 0;
+                for (float y : scene.y) {
+                    top = Math.max(top, y);
+                }
+                System.out.printf("%d s  top %.3f of %.3f  KE %.2e%n", t, top, r + pitch * (layers - 1),
+                        state.kinetic());
+            }
+        }
+    }
+
+    /**
+     * A heap on a rough floor: a stack of free spheres dropped on a bed of fixed ones, as a granular experiment glues
+     * grains to its floor, so that a sphere cannot roll away without climbing. Its height and how far it spreads.
+     */
+    @Test
+    void heapOnABed() {
+        double r = 0.03;
+        int bed = Integer.getInteger("rigid.bed", 20);
+        int side = Integer.getInteger("rigid.side", 5);
+        int layers = Integer.getInteger("rigid.layers", 14);
+        double width = bed * 2 * r;
+        int free = side * side * layers;
+        try (Scene scene = new Scene(bed * bed + free).uniform(r, 0.1)) {
+            scene.solve = SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT;
+            scene.muStatic = scene.muKinetic = Double.parseDouble(System.getProperty("rigid.mu", "0.5"));
+            scene.sx = scene.sz = width;
+            scene.sy = 1.6;
+            int k = 0;
+            for (int i = 0; i < bed; i++) {
+                for (int l = 0; l < bed; l++, k++) {
+                    scene.x[k] = (float) (r + 2 * r * i);
+                    scene.z[k] = (float) (r + 2 * r * l);
+                    scene.y[k] = (float) r;
+                    scene.im[k] = 0;
+                }
+            }
+            Random random = new Random(11);
+            double pitch = Double.parseDouble(System.getProperty("rigid.pitch", "2.2")) * r;
+            double margin = (width - pitch * (side - 1)) / 2;
+            for (int j = 0; j < layers; j++) {
+                for (int i = 0; i < side; i++) {
+                    for (int l = 0; l < side; l++, k++) {
+                        scene.x[k] = (float) (margin + pitch * i + 0.2 * r * random.nextDouble());
+                        scene.z[k] = (float) (margin + pitch * l + 0.2 * r * random.nextDouble());
+                        scene.y[k] = (float) (3.2 * r + pitch * j);
+                    }
+                }
+            }
+            scene.start(BACKEND);
+            for (int t = 1; t <= 6; t++) {
+                scene.advanceSeconds(1);
+                SphereDiagnostics state = scene.diagnostics();
+                double top = 0;
+                double spread = 0;
+                for (int s = bed * bed; s < scene.n; s++) {
+                    top = Math.max(top, scene.y[s]);
+                    spread = Math.max(spread, Math.hypot(scene.x[s] - width / 2, scene.z[s] - width / 2));
+                }
+                System.out.printf("%d s  top %.3f  spread %.3f of %.3f  KE %.2e%n", t, top, spread, width / 2,
+                        state.kinetic());
+            }
+        }
+    }
+
     /** Twenty spheres in a column a sphere wide, touching, as the sweep has them: how still they come to rest. */
     @Test
     void columnOf20() {

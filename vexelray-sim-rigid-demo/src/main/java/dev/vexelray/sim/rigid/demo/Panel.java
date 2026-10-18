@@ -48,6 +48,8 @@ final class Panel {
                         controls::solver),
                 new Pick<>("Solver", "Restitution", Controls.RESTITUTIONS, e -> e == 0 ? "None" : String.valueOf(e),
                         controls::restitution, controls::restitution),
+                new Pick<>("Solver", "Friction", Controls.FRICTIONS, mu -> mu == 0 ? "None" : String.valueOf(mu),
+                        controls::friction, controls::friction),
                 new Pick<>("Solver", "Substeps", Controls.SUBSTEPS, String::valueOf, controls::substeps,
                         controls::substeps),
                 new Pick<>("Solver", "Iterations", Controls.ITERATIONS, String::valueOf, controls::iterations,

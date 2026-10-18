@@ -335,6 +335,20 @@ contacts a step unsolved on the pile of 4096.
         **What does not hold yet: the free pyramid at one pass.** Its top's weight sloshes from contact to contact,
         all of it on one at a time, and the pyramid falls as it did before. Two passes stand it, drifting 1.7 mm/s
         as a whole; at eight it creeps at 0.3 mm/s.
+  - [x] **The demo has friction** (2026-10-18): a Friction control (none, 0.3, 0.5, 1), static and kinetic alike,
+        which only Gauss–Seidel applies, and a scenario, *Heap on a bed*: 350 spheres dropped as a tall, narrow stack
+        on a bed of 400 fixed ones. With friction it stands as a steep heap; without, a lower, ragged mound. Still
+        open from this stage: the picture draws no orientation, so a spin cannot be seen.
+
+        **A finding on the way: friction alone makes no heap.** The same stack on the smooth floor spreads into a
+        single layer at μ = 0.5 as at none. Friction holds a contact point still, and a sphere rolling has none
+        moving, so the spheres at the edge roll outward and nothing stops them. Granular experiments glue grains to
+        the floor for this reason, and the bed is that: to roll away a sphere has to climb. Measured with
+        `CreepTest` (`towerInABox`, `heapOnABed`), the highest sphere after 6 s: the stack dropped on the bed, 0.157
+        m at none and 0.241 at 0.5; a jittered square tower slumping in a box a sphere wider than it, 0.423 at none
+        and 0.485 at 0.5. Wider stacks on the bed did not part the two cleanly, the height of one perched sphere being
+        a noisy reading. A heap on a smooth floor, and a slope a pile holds, want **rolling resistance**: that was
+        to wait until something needed it, and this does.
 - [x] **Spheres squashed by what presses them** (2026-10-09), in the picture only. `Spheres.show` measures each
       sphere's overlaps at the end of a step, with spheres and walls, as a flattening `Σ f n nᵀ` and a lean `Σ f n`,
       `f` the sphere's share of the overlap over its radius; `shown` grows to 32 floats a sphere to hold them before

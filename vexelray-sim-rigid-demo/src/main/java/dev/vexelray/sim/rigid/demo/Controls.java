@@ -44,6 +44,9 @@ final class Controls {
     /** Restitution: how much of a contact's closing speed it parts at. */
     static final List<Double> RESTITUTIONS = List.of(0.0, 0.3, 0.6, 0.9);
 
+    /** Friction, static and kinetic alike: Coulomb's coefficient. Only Gauss–Seidel's contacts have it. */
+    static final List<Double> FRICTIONS = List.of(0.0, 0.3, 0.5, 1.0);
+
     /**
      * How much the picture squashes a sphere by what presses it: none, its overlaps just closed, and twice and four
      * times that. Only the picture: the solve never sees it.
@@ -57,6 +60,7 @@ final class Controls {
     private Solver solver = Solver.AVERAGED;
     private SphereStep.Solve solve = SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT;
     private double restitution;
+    private double friction;
     private double squash = 3.0;
     private int substeps = 10;
     private int iterations = 1;
@@ -107,6 +111,15 @@ final class Controls {
 
     synchronized void restitution(Double e) {
         restitution = e;
+        version++;
+    }
+
+    synchronized double friction() {
+        return friction;
+    }
+
+    synchronized void friction(Double mu) {
+        friction = mu;
         version++;
     }
 
