@@ -104,13 +104,14 @@ import static dev.supirvast.vastir.build.Body.v;
  * 27 colours of the grid's cells with one serial invocation a cell, was as right and five times the cost, and is
  * gone; {@code docs/TODO.md} keeps its measurements.
  *
- * <p>A pass has two phases over the list: parting, which corrects the normals, then rubbing, which applies friction
- * once every normal is corrected, in the same rounds over again ({@link #contact}). Each contact keeps what it has
- * taken this substep, normal and tangential ({@code contactImpulse}), and each wall likewise ({@code wallImpulse}):
- * friction clamps the whole of it, and the next substep starts from it. {@link #keepContacts} keeps the list a
- * substep, {@link #listContacts} finds each pair's impulses in it again, and {@link #warm} and {@link #warmWalls}
- * apply them before anything is solved: a pile then starts every substep carrying its weight, and the pass solves only
- * what changed. Without that, a pile with friction never rested; {@code docs/TODO.md} has the measurements.
+ * <p>A pass has two phases over the list: parting, which corrects the normals, then rubbing, which applies rolling
+ * resistance and friction once every normal is corrected, in the same rounds over again ({@link #contact}). Each
+ * contact keeps what it has taken this substep, normal, tangential and angular ({@code contactImpulse}), and each
+ * wall likewise ({@code wallImpulse}): friction and rolling resistance clamp the whole of it, and the next substep
+ * starts from it. {@link #keepContacts} keeps the list a substep, {@link #listContacts} finds each pair's impulses
+ * in it again, and {@link #warm} and {@link #warmWalls} apply them before anything is solved: a pile then starts every
+ * substep carrying its weight, and the pass solves only what changed. Without that, a pile with friction never
+ * rested; {@code docs/TODO.md} has the measurements.
  *
  * <h2>What it is not, yet</h2>
  *
@@ -120,7 +121,8 @@ import static dev.supirvast.vastir.build.Body.v;
  *       constraints' turns {@code tx, ty, tz}. {@link #friction} turns spheres at the contacts and walls
  *       Gauss–Seidel solves; Jacobi's solve has none, so there a sphere keeps the spin it was given, and a pile
  *       slumps flat.</li>
- *   <li><b>No rolling resistance.</b> A sphere rolling without slipping has no slip to resist, and rolls on.</li>
+ *   <li><b>Rolling resistance as a torque only</b> ({@link #roll}): at most {@code μr R N}, against rolling and
+ *       twisting alike, with no spring in it; a sphere stops rolling and stays, rather than rocking back.</li>
  *   <li><b>Only spheres</b>, which is what makes contact a distance. Boxes need orientation and a contact manifold.</li>
  * </ul>
  *
@@ -133,9 +135,10 @@ public final class Spheres {
     public static final int WORKGROUP = CountingSort.BLOCK;
 
     /**
-     * {@code [h, gx, gy, gz, sx, sy, sz, omega, averaged, restitution, muStatic, muKinetic]}, see {@link #params}.
+     * {@code [h, gx, gy, gz, sx, sy, sz, omega, averaged, restitution, muStatic, muKinetic, muRolling]}, see
+     * {@link #params}.
      */
-    public static final int PARAM_COUNT = 12;
+    public static final int PARAM_COUNT = 13;
 
     static final int H = 0;
     static final int GX = 1;
@@ -149,6 +152,7 @@ public final class Spheres {
     static final int RESTITUTION = 9;
     static final int MU_STATIC = 10;
     static final int MU_KINETIC = 11;
+    static final int MU_ROLLING = 12;
 
     /** Below this squared distance two centres are taken as one point, which has no direction to part them along. */
     private static final float COINCIDENT = 1e-12f;
@@ -192,9 +196,23 @@ public final class Spheres {
     public static int[] params(double h, double gx, double gy, double gz, double sx, double sy, double sz,
                                double omega, boolean averaged, double restitution, double muStatic,
                                double muKinetic) {
-        if (!(muStatic >= 0) || !(muKinetic >= 0) || Double.isInfinite(muStatic) || Double.isInfinite(muKinetic)) {
+        return params(h, gx, gy, gz, sx, sy, sz, omega, averaged, restitution, muStatic, muKinetic, 0);
+    }
+
+    /**
+     * As above, with rolling resistance ({@link #roll}), which only Gauss–Seidel's contacts and walls apply.
+     *
+     * @param muRolling how much a contact resists the two spheres turning against each other, rolling or twisting: at
+     *                  most this times its normal impulse and the pair's effective radius {@code rₐ rₒ / (rₐ + rₒ)},
+     *                  the sphere's own against a wall; 0, the default, for none
+     */
+    public static int[] params(double h, double gx, double gy, double gz, double sx, double sy, double sz,
+                               double omega, boolean averaged, double restitution, double muStatic,
+                               double muKinetic, double muRolling) {
+        if (!(muStatic >= 0) || !(muKinetic >= 0) || !(muRolling >= 0) || Double.isInfinite(muStatic)
+                || Double.isInfinite(muKinetic) || Double.isInfinite(muRolling)) {
             throw new IllegalArgumentException("friction coefficients are finite and at least 0, got " + muStatic
-                    + " and " + muKinetic);
+                    + ", " + muKinetic + " and " + muRolling);
         }
         if (!(restitution >= 0) || !(restitution <= 1)) {
             throw new IllegalArgumentException("restitution is in [0, 1], got " + restitution);
@@ -204,15 +222,16 @@ public final class Spheres {
                     + ", box " + sx + " × " + sy + " × " + sz + ", omega " + omega);
         }
         return new int[] {bits(h), bits(gx), bits(gy), bits(gz), bits(sx), bits(sy), bits(sz), bits(omega),
-                bits(averaged ? 1 : 0), bits(restitution), bits(muStatic), bits(muKinetic)};
+                bits(averaged ? 1 : 0), bits(restitution), bits(muStatic), bits(muKinetic), bits(muRolling)};
     }
 
     /**
-     * Whether {@code params} ({@link #params}) have friction: what a {@link SphereStepper} is told, so that it runs a
-     * pass's friction only where there is some.
+     * Whether {@code params} ({@link #params}) have friction or rolling resistance: what a {@link SphereStepper} is
+     * told, so that it runs a pass's rubbing only where there is some.
      */
     public static boolean rubs(int[] params) {
-        return Float.intBitsToFloat(params[MU_STATIC]) + Float.intBitsToFloat(params[MU_KINETIC]) > 0;
+        return Float.intBitsToFloat(params[MU_STATIC]) + Float.intBitsToFloat(params[MU_KINETIC])
+                + Float.intBitsToFloat(params[MU_ROLLING]) > 0;
     }
 
     // --- the buffers each pass binds, in order -------------------------------------------------------------
@@ -370,16 +389,12 @@ public final class Spheres {
                             touching.when(eq(v(rubs), i(0)), parting -> {
                                 // The warm start, with friction; without, the substep starts from nothing, as a
                                 // frictionless pile rests best: warm, a column rang for seconds before it settled.
-                                LocalVar rubbing = parting.let("rubbing", add(load(m.params, i(MU_STATIC)),
-                                        load(m.params, i(MU_KINETIC))));
+                                LocalVar rubbing = rubbing(parting, m.params);
                                 parting.when(eq(v(pass), i(1)), first -> {
                                     first.when(gt(v(rubbing), f(0)), warming ->
                                             warm(warming, m, ha, wa, ho, wo, d, d2, reach, taken));
                                     first.when(not(gt(v(rubbing), f(0))), cold -> {
-                                        cold.set(taken.normal, f(0));
-                                        for (int k = 0; k < 3; k++) {
-                                            cold.set(taken.p[k], f(0));
-                                        }
+                                        taken.clear(cold);
                                     });
                                 });
                                 for (int axis = 0; axis < 3; axis++) {
@@ -411,6 +426,9 @@ public final class Spheres {
                                     n[axis] = rubbing.let("n", div(v(d[axis]), v(dist)));
                                 }
                                 LocalVar share = rubbing.let("share", div(v(dist), v(reach)));
+                                LocalVar pairRadius = rubbing.let("pairRadius", div(mul(load(radius, v(a)),
+                                        load(radius, v(o))), v(reach)));
+                                roll(rubbing, m, ha, v(wa), ho, v(wo), v(pairRadius), taken);
                                 friction(rubbing, m, ha, v(wa), mul(v(share), load(radius, v(a))), ho, v(wo),
                                         mul(v(share), load(radius, v(o))), n, taken);
                             });
@@ -453,32 +471,52 @@ public final class Spheres {
         LocalVar turnsA = turnsPerImpulse(b, v(wa), mul(v(share), v(ra)), v(ra));
         LocalVar turnsO = turnsPerImpulse(b, v(wo), mul(v(share), v(ro)), v(ro));
         rub(b, a, wa, turnsA, o, wo, turnsO, n, taken.p);
+        // The angular impulse: a turned by Iₐ⁻¹ q, o by −Iₒ⁻¹ q.
+        LocalVar ia = b.let("ia", div(v(wa), mul(f((float) INERTIA), mul(v(ra), v(ra)))));
+        LocalVar io = b.let("io", div(v(wo), mul(f((float) INERTIA), mul(v(ro), v(ro)))));
+        for (int k = 0; k < 3; k++) {
+            b.set(a.turned[k], add(v(a.turned[k]), mul(v(ia), v(taken.q[k]))));
+            b.set(o.turned[k], sub(v(o.turned[k]), mul(v(io), v(taken.q[k]))));
+        }
     }
 
     /**
-     * What a contact has taken this substep, over every pass so far: its normal impulse {@code λₙ} and its tangential
-     * one {@code p}, both in position terms, as {@link #WORDS} floats from {@code at} in {@code buffer}. Friction clamps
-     * the whole of {@code p} to {@code μ λₙ}, not each pass's share, so a pass that finds a contact already parted
-     * still holds it by the weight it carried earlier in the substep.
+     * What a contact has taken this substep, over every pass so far: its normal impulse {@code λₙ}, its tangential one
+     * {@code p}, both in position terms, and its angular one {@code q}, which resists rolling ({@link #roll}), as
+     * {@link #WORDS} floats from {@code at} in {@code buffer}. Friction clamps the whole of {@code p} to {@code μ λₙ},
+     * not each pass's share, so a pass that finds a contact already parted still holds it by the weight it carried
+     * earlier in the substep; and rolling resistance the whole of {@code q} likewise.
      */
-    private record Impulse(Buffer buffer, LocalVar at, LocalVar normal, LocalVar[] p) {
+    private record Impulse(Buffer buffer, LocalVar at, LocalVar normal, LocalVar[] p, LocalVar[] q) {
 
-        static final int WORDS = 4;
+        static final int WORDS = 7;
 
         static Impulse of(Body b, Buffer buffer, Expr at) {
             LocalVar base = b.let("impulseAt", at);
             LocalVar normal = b.let("normalTaken", load(buffer, v(base)));
             LocalVar[] p = new LocalVar[3];
+            LocalVar[] q = new LocalVar[3];
             for (int k = 0; k < 3; k++) {
                 p[k] = b.let("tangentTaken", load(buffer, add(v(base), i(1 + k))));
+                q[k] = b.let("turnTaken", load(buffer, add(v(base), i(4 + k))));
             }
-            return new Impulse(buffer, base, normal, p);
+            return new Impulse(buffer, base, normal, p, q);
+        }
+
+        /** Nothing taken. */
+        void clear(Body b) {
+            b.set(normal, f(0));
+            for (int k = 0; k < 3; k++) {
+                b.set(p[k], f(0));
+                b.set(q[k], f(0));
+            }
         }
 
         void store(Body b) {
             b.store(buffer, v(at), v(normal));
             for (int k = 0; k < 3; k++) {
                 b.store(buffer, add(v(at), i(1 + k)), v(p[k]));
+                b.store(buffer, add(v(at), i(4 + k)), v(q[k]));
             }
         }
     }
@@ -639,6 +677,69 @@ public final class Spheres {
     }
 
     /** A sphere's inverse inertia times a lever: what turns an impulse at that lever into a turn. */
+    /** Whether the parameters ask for any rubbing: friction, static or kinetic, or rolling resistance. */
+    private static LocalVar rubbing(Body b, Buffer params) {
+        return b.let("rubbing", add(load(params, i(MU_STATIC)), add(load(params, i(MU_KINETIC)),
+                load(params, i(MU_ROLLING)))));
+    }
+
+    /**
+     * Rolling resistance at a contact, as a turn of each sphere, before its friction: sphere {@code a} against sphere
+     * {@code o}, or a wall if {@code o} is null, whose effective radius is {@code reach}, {@code rₐ rₒ / (rₐ + rₒ)}
+     * for a pair and the sphere's own against a wall.
+     *
+     * <p>The two spheres' turns over the substep, {@code h ω + t}, are taken against each other, rolling and twisting
+     * alike. Stopping all of that takes an angular impulse of {@code −Δθ / (Iₐ⁻¹ + Iₒ⁻¹)}, which turns {@code a} by
+     * {@code Iₐ⁻¹ q} and {@code o} by {@code −Iₒ⁻¹ q}; the whole, warm start and passes before included, is held while
+     * within {@code μr R λₙ}, and cut to it past that, as {@link #friction} cuts its own. A torque at most
+     * {@code μr R N}, the commonest rolling resistance in granular dynamics: a sphere rolling on the floor slows at
+     * {@code 5/7 μr g}, and one at rest in a heap stays there while that holds it. Friction, which follows, then keeps
+     * the contact point still as the turns change, and so slows the sphere's centre too.
+     */
+    private static void roll(Body b, Motion m, Held a, Expr wa, Held o, Expr wo, Expr reach, Impulse taken) {
+        LocalVar muR = b.let("muR", load(m.params, i(MU_ROLLING)));
+        LocalVar h = b.let("h", load(m.params, i(H)));
+        LocalVar ra = b.let("ra", load(m.radius, v(a.s)));
+        LocalVar ia = b.let("ia", div(wa, mul(f((float) INERTIA), mul(v(ra), v(ra)))));
+        LocalVar inverse = b.let("inverse", v(ia));
+        LocalVar io = null;
+        LocalVar[] against = new LocalVar[3];
+        for (int k = 0; k < 3; k++) {
+            against[k] = b.let("against", add(mul(v(h), load(m.spin[k], v(a.s))), v(a.turned[k])));
+        }
+        if (o != null) {
+            LocalVar ro = b.let("ro", load(m.radius, v(o.s)));
+            io = b.let("io", div(wo, mul(f((float) INERTIA), mul(v(ro), v(ro)))));
+            b.set(inverse, add(v(inverse), v(io)));
+            for (int k = 0; k < 3; k++) {
+                b.set(against[k], sub(v(against[k]), add(mul(v(h), load(m.spin[k], v(o.s))), v(o.turned[k]))));
+            }
+        }
+        LocalVar turnsO = io;
+        b.when(gt(v(inverse), f(0)), turning -> {
+            LocalVar[] whole = new LocalVar[3];
+            for (int k = 0; k < 3; k++) {
+                whole[k] = turning.let("whole", sub(v(taken.q[k]), div(v(against[k]), v(inverse))));
+            }
+            LocalVar size2 = turning.let("size2", dot(whole, whole));
+            LocalVar holds = turning.let("holds", mul(mul(v(muR), reach), v(taken.normal)));
+            turning.when(gt(v(size2), mul(v(holds), v(holds))), slipping -> {
+                LocalVar cut = slipping.let("cut", min(f(1), div(v(holds), sqrt(v(size2)))));
+                for (int k = 0; k < 3; k++) {
+                    slipping.set(whole[k], mul(v(whole[k]), v(cut)));
+                }
+            });
+            for (int k = 0; k < 3; k++) {
+                LocalVar change = turning.let("change", sub(v(whole[k]), v(taken.q[k])));
+                turning.set(taken.q[k], v(whole[k]));
+                turning.set(a.turned[k], add(v(a.turned[k]), mul(v(ia), v(change))));
+                if (o != null) {
+                    turning.set(o.turned[k], sub(v(o.turned[k]), mul(v(turnsO), v(change))));
+                }
+            }
+        });
+    }
+
     private static LocalVar turnsPerImpulse(Body b, Expr w, Expr lever, Expr radius) {
         return b.let("turns", div(mul(w, lever), mul(f((float) INERTIA), mul(radius, radius))));
     }
@@ -800,7 +901,7 @@ public final class Spheres {
             LocalVar w = free.let("w", load(bs.get(4), v(s)));
             LocalVar turns = turnsPerImpulse(free, v(w), v(r), v(r));
             Held held = Held.of(free, s, at, displaced, turned);
-            LocalVar rubbing = free.let("rubbing", add(load(params, i(MU_STATIC)), load(params, i(MU_KINETIC))));
+            LocalVar rubbing = rubbing(free, params);
             for (int a = 0; a < 3; a++) {
                 int axis = a;
                 Impulse taken = Impulse.of(free, bs.get(12),
@@ -812,10 +913,7 @@ public final class Spheres {
                 free.when(gt(v(position), sub(load(params, i(extent[axis])), v(reach))), high -> high.set(out, f(-1)));
                 // Forgotten once the sphere has left the wall, and without friction, when nothing needs it.
                 free.when(not(and(gt(v(rubbing), f(0)), not(eq(v(out), f(0))))), gone -> {
-                    gone.set(taken.normal, f(0));
-                    for (int k = 0; k < 3; k++) {
-                        gone.set(taken.p[k], f(0));
-                    }
+                    taken.clear(gone);
                 });
                 free.when(and(gt(v(rubbing), f(0)), not(eq(v(out), f(0)))), near -> {
                     LocalVar push = near.let("push", mul(mul(v(taken.normal), v(w)), v(out)));
@@ -828,6 +926,10 @@ public final class Spheres {
                         n[k] = near.let("n", k == axis ? v(out) : f(0));
                     }
                     rub(near, held, w, turns, null, null, null, n, taken.p);
+                    for (int k = 0; k < 3; k++) {
+                        // The angular impulse, Iₐ⁻¹ q: the turn per impulse at the surface over the radius.
+                        near.set(held.turned[k], add(v(held.turned[k]), div(mul(v(turns), v(taken.q[k])), v(r))));
+                    }
                 });
                 taken.store(free);
             }
@@ -1295,6 +1397,7 @@ public final class Spheres {
                     for (int k = 0; k < 3; k++) {
                         n[k] = near.let("n", k == axis ? v(out) : f(0));
                     }
+                    roll(near, friction, held, v(w), null, null, v(r), taken);
                     friction(near, friction, held, v(w), v(r), null, null, null, n, taken);
                 });
                 taken.store(free);

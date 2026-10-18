@@ -29,14 +29,15 @@ final class Messages {
      * acted on.
      */
     record Build(Scenario scenario, SphereStep.Solve solve, int substeps, int iterations, boolean carry, double omega,
-                 boolean averaged, double restitution, double friction, SphereRunner.Backend backend) {
+                 boolean averaged, double restitution, double friction, double rolling,
+                 SphereRunner.Backend backend) {
     }
 
     /**
-     * How the solve relaxes, how springy contacts are and how they grip, from the next step on. A sample: only the
-     * newest matters.
+     * How the solve relaxes, how springy contacts are and how they grip and resist rolling, from the next step on. A
+     * sample: only the newest matters.
      */
-    record Relax(double omega, boolean averaged, double restitution, double friction) {
+    record Relax(double omega, boolean averaged, double restitution, double friction, double rolling) {
     }
 
     /**

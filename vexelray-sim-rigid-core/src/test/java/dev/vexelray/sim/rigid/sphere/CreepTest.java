@@ -145,6 +145,7 @@ class CreepTest {
         try (Scene scene = new Scene(side * side * layers).uniform(r, 0.1)) {
             scene.solve = SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT;
             scene.muStatic = scene.muKinetic = Double.parseDouble(System.getProperty("rigid.mu", "0.5"));
+            scene.muRolling = Double.parseDouble(System.getProperty("rigid.rolling", "0"));
             double width = side * 2 * r + Double.parseDouble(System.getProperty("rigid.slack", "0.01"));
             scene.sx = scene.sz = width;
             scene.sy = layers * 2 * r + 0.5;
@@ -186,11 +187,12 @@ class CreepTest {
         int bed = Integer.getInteger("rigid.bed", 20);
         int side = Integer.getInteger("rigid.side", 5);
         int layers = Integer.getInteger("rigid.layers", 14);
-        double width = bed * 2 * r;
+        double width = bed > 0 ? bed * 2 * r : 1.2;
         int free = side * side * layers;
         try (Scene scene = new Scene(bed * bed + free).uniform(r, 0.1)) {
             scene.solve = SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT;
             scene.muStatic = scene.muKinetic = Double.parseDouble(System.getProperty("rigid.mu", "0.5"));
+            scene.muRolling = Double.parseDouble(System.getProperty("rigid.rolling", "0"));
             scene.sx = scene.sz = width;
             scene.sy = 1.6;
             int k = 0;
@@ -210,7 +212,7 @@ class CreepTest {
                     for (int l = 0; l < side; l++, k++) {
                         scene.x[k] = (float) (margin + pitch * i + 0.2 * r * random.nextDouble());
                         scene.z[k] = (float) (margin + pitch * l + 0.2 * r * random.nextDouble());
-                        scene.y[k] = (float) (3.2 * r + pitch * j);
+                        scene.y[k] = (float) ((bed > 0 ? 3.2 : 1.1) * r + pitch * j);
                     }
                 }
             }
@@ -272,6 +274,7 @@ class CreepTest {
             scene.omega = 1;
             scene.averaged = false;
             scene.muStatic = scene.muKinetic = Double.parseDouble(System.getProperty("rigid.mu", "0.5"));
+            scene.muRolling = Double.parseDouble(System.getProperty("rigid.rolling", "0"));
             scene.sx = scene.sy = scene.sz = 0.5;
             scene.gx = 9.81 * Math.sin(theta);
             scene.gy = -9.81 * Math.cos(theta);
@@ -304,6 +307,7 @@ class CreepTest {
             scene.omega = 1;
             scene.averaged = false;
             scene.muStatic = scene.muKinetic = Double.parseDouble(System.getProperty("rigid.mu", "0.5"));
+            scene.muRolling = Double.parseDouble(System.getProperty("rigid.rolling", "0"));
             scene.sx = scene.sy = scene.sz = 0.5;
             double c = 0.25;
             double side = 2 * r;
@@ -339,6 +343,7 @@ class CreepTest {
             scene.omega = 1;
             scene.averaged = false;
             scene.muStatic = scene.muKinetic = Double.parseDouble(System.getProperty("rigid.mu", "0.5"));
+            scene.muRolling = Double.parseDouble(System.getProperty("rigid.rolling", "0"));
             scene.sx = scene.sy = scene.sz = 0.5;
             double c = 0.25;
             double side = 2 * r;

@@ -348,7 +348,29 @@ contacts a step unsolved on the pile of 4096.
         m at none and 0.241 at 0.5; a jittered square tower slumping in a box a sphere wider than it, 0.423 at none
         and 0.485 at 0.5. Wider stacks on the bed did not part the two cleanly, the height of one perched sphere being
         a noisy reading. A heap on a smooth floor, and a slope a pile holds, want **rolling resistance**: that was
-        to wait until something needed it, and this does.
+        to wait until something needed it, and this does. (Built next, below; the bed is gone from the demo.)
+  - [x] **Rolling resistance** (2026-10-18). `Spheres.roll`, in the rubbing phase, before friction: the two
+        spheres' turns over the substep, `h ω + t`, taken against each other, rolling and twisting alike, and an
+        angular impulse to stop them, `−Δθ / (Iₐ⁻¹ + Iₒ⁻¹)`, kept as the substep's whole, warm-started, and clamped
+        to `μr R λₙ`, `R` the pair's effective radius `rₐ rₒ / (rₐ + rₒ)` and a sphere's own against a wall. A torque
+        of at most `μr R N`, the commonest model in granular dynamics, with no spring: a sphere stops and stays,
+        rather than rocking back. The impulse grows to seven words, `λₙ`, `p` and `q`. One coefficient for rolling
+        and twisting, so a sphere spinning in place on the floor, which friction at a point cannot touch, stops too.
+
+        `RollingTest`, both backends: a sphere rolling at 1 m/s with `μr = 0.1` slows at `5/7 μr g`, to 1e-2 m/s
+        after 0.5 s, still rolling, and stops and stays stopped; without, it rolls on at 1 m/s; one spinning about
+        the vertical at 5 rad/s slows at `μr g / ⅖ r` and stops.
+
+        **A heap on a smooth floor.** `CreepTest`'s `heapOnABed` with no bed: a 7 × 7 × 7 block let go on a floor
+        1.2 m wide, μ = 0.5, the highest sphere after 6 s: 0.030 m at no rolling resistance, a single layer; 0.174
+        at 0.3; 0.209 at 0.5. The demo's *Heap of 343* is that block, with a Rolling control (none, 0.1, 0.3, 0.5).
+
+        **What it costs, and changes:** the sweep's step times are the same as before within run-to-run noise (pile
+        of 4096 with friction, 10 substeps: 2.90 ms, against 3.04). Without friction every state is the same to the
+        last digit; with friction and no rolling resistance the column's too, while the piles, which are chaotic,
+        settle into others as still (343 at 10: 4.0e-6 J moving against 2.3e-6, no sphere moving in either). The
+        rubbing kernel is bigger, and with no rolling resistance its turns add only zeros; the
+        likely cause is the GPU compiling the bigger kernel's arithmetic differently, which was not chased.
 - [x] **Spheres squashed by what presses them** (2026-10-09), in the picture only. `Spheres.show` measures each
       sphere's overlaps at the end of a step, with spheres and walls, as a flattening `Σ f n nᵀ` and a lean `Σ f n`,
       `f` the sphere's share of the overlap over its radius; `shown` grows to 32 floats a sphere to hold them before

@@ -47,6 +47,9 @@ final class Controls {
     /** Friction, static and kinetic alike: Coulomb's coefficient. Only Gauss–Seidel's contacts have it. */
     static final List<Double> FRICTIONS = List.of(0.0, 0.3, 0.5, 1.0);
 
+    /** Rolling resistance: how much a contact resists its spheres turning against each other. Gauss–Seidel only. */
+    static final List<Double> ROLLINGS = List.of(0.0, 0.1, 0.3, 0.5);
+
     /**
      * How much the picture squashes a sphere by what presses it: none, its overlaps just closed, and twice and four
      * times that. Only the picture: the solve never sees it.
@@ -61,6 +64,7 @@ final class Controls {
     private SphereStep.Solve solve = SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT;
     private double restitution;
     private double friction;
+    private double rolling;
     private double squash = 3.0;
     private int substeps = 10;
     private int iterations = 1;
@@ -120,6 +124,15 @@ final class Controls {
 
     synchronized void friction(Double mu) {
         friction = mu;
+        version++;
+    }
+
+    synchronized double rolling() {
+        return rolling;
+    }
+
+    synchronized void rolling(Double mu) {
+        rolling = mu;
         version++;
     }
 

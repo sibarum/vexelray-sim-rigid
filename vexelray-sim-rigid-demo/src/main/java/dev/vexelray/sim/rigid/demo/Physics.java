@@ -73,6 +73,7 @@ final class Physics implements AutoCloseable {
     private boolean averaged = true;
     private double restitution;
     private double friction;
+    private double rolling;
     private double simulated;
     private double stepMillis;
     private double gpuMillis;
@@ -111,6 +112,7 @@ final class Physics implements AutoCloseable {
         averaged = b.averaged();
         restitution = b.restitution();
         friction = b.friction();
+        rolling = b.rolling();
         news.report(PhysicsNews.Report.waiting(scenario));
         SphereStep step = new SphereStep(from.n, b.substeps(), b.iterations(), from.grid(), b.solve());
         SphereRunner.Backend backend = b.backend();
@@ -142,6 +144,7 @@ final class Physics implements AutoCloseable {
         averaged = r.averaged();
         restitution = r.restitution();
         friction = r.friction();
+        rolling = r.rolling();
         if (sim != null) {
             sim.params(params(sim.substeps(), state));
         }
@@ -201,7 +204,7 @@ final class Physics implements AutoCloseable {
 
     private int[] params(int substeps, Scenario.State s) {
         return Spheres.params(STEP_SECONDS / substeps, 0, GRAVITY, 0, s.extent[0], s.extent[1], s.extent[2], omega,
-                averaged, restitution, friction, friction);
+                averaged, restitution, friction, friction, rolling);
     }
 
     /** After the lane has stopped: every simulation, then the context. The application closes the device after. */

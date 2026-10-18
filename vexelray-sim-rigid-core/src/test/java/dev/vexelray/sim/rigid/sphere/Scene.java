@@ -47,6 +47,8 @@ final class Scene implements AutoCloseable {
     /** Friction, static and kinetic: {@link Spheres#friction}, applied by Gauss–Seidel only. */
     double muStatic;
     double muKinetic;
+    /** Rolling resistance: {@link Spheres#roll}, applied by Gauss–Seidel only. */
+    double muRolling;
     /** Whether the solve searches a grid, its cells as wide as the widest sphere, or tests every pair. */
     boolean grid;
     /** How a pass solves; Gauss–Seidel searches the grid whatever {@link #grid} says. */
@@ -107,7 +109,7 @@ final class Scene implements AutoCloseable {
         step = new SphereStep(n, substeps, iterations, gridded ? SphereGrid.covering(sx, sy, sz, widest()) : null,
                 solve, rounds, SphereStep.CONTACTS_PER_SPHERE);
         stepper = new SphereStepper(step);
-        stepper.friction(muStatic + muKinetic > 0);
+        stepper.friction(muStatic + muKinetic + muRolling > 0);
         if (backend == Backend.CPU) {
             runner = PassRunner.cpu(step, Spheres.WORKGROUP, PassRunner.NO_SUBGROUP);
         } else {
@@ -123,7 +125,7 @@ final class Scene implements AutoCloseable {
         }
         step.constants().forEach(runner::write);
         runner.write("params", Spheres.params(dt / substeps, gx, gy, gz, sx, sy, sz, omega, averaged, restitution,
-                muStatic, muKinetic));
+                muStatic, muKinetic, muRolling));
         runner.write("x", x);
         runner.write("y", y);
         runner.write("z", z);
