@@ -65,7 +65,7 @@ final class Physics implements AutoCloseable {
 
     private SphereSimulation sim;
     private Scenario.State state;
-    private Scenario scenario = Scenario.COLUMN;
+    private Scenario scenario = Scenario.BIG_PILE;
     private long steps;
     private String problem = "";
 

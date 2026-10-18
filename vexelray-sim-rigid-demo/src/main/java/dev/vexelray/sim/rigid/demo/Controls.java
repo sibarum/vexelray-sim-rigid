@@ -53,9 +53,9 @@ final class Controls {
     static final List<Integer> SUBSTEPS = List.of(1, 2, 5, 10, 20, 40);
     static final List<Integer> ITERATIONS = List.of(1, 2, 5, 10);
 
-    private Scenario scenario = Scenario.COLUMN;
+    private Scenario scenario = Scenario.BIG_PILE;
     private Solver solver = Solver.AVERAGED;
-    private SphereStep.Solve solve = SphereStep.Solve.JACOBI;
+    private SphereStep.Solve solve = SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT;
     private double restitution;
     private double squash = 3.0;
     private int substeps = 10;

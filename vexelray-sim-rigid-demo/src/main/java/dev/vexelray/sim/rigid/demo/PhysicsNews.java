@@ -41,7 +41,7 @@ final class PhysicsNews {
         }
     }
 
-    private final AtomicReference<Report> latest = new AtomicReference<>(Report.waiting(Scenario.COLUMN));
+    private final AtomicReference<Report> latest = new AtomicReference<>(Report.waiting(Scenario.BIG_PILE));
 
     void report(Report report) {
         latest.set(report);
