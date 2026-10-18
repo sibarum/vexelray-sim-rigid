@@ -12,13 +12,10 @@ import dev.vexelray.framework.shell.VexelApplication;
  *
  * <pre>
  * RigidDemo                    the window
- * RigidDemo --automation=0     the window, driveable on a free port (ottermate reads it off stdout); debug edition
+ * RigidDemo --automation=0     the window, driveable on a free port (ottermate reads it off stdout)
  * </pre>
  *
- * <p><b>Two editions declare the application.</b> {@code RigidDemoApp} is in {@code src/edition-debug} and
- * {@code src/edition-release}, and the pom compiles one of them. The debug edition's names {@code AutomationStarter},
- * the driving socket, off unless asked for and loopback-only when it is. The release edition names none, and
- * {@code -Pnative-release} drops the automation modules from the classpath, so the shipped binary links no socket.
+ * <p>The {@code @VexelApp} declaration is {@code RigidDemoApp}; this class holds the facts it reads.
  *
  * Needs {@code --enable-native-access=ALL-UNNAMED}; {@code mvn exec:exec} passes it.
  */

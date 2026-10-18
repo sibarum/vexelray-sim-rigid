@@ -73,8 +73,8 @@ readings are landmarks named `reading.about`, `reading.time`, `reading.overlap`,
 ### Native executable
 
 With a GraalVM JDK (25, as `JAVA_HOME`), from a Visual Studio developer prompt (or after `vcvars64.bat`, so
-`link.exe` is MSVC's and `rc.exe` is on `PATH`), the demo builds to a native binary as two editions of the same code,
-as the fluid demo's does. Both are profile-gated, so ordinary builds stay fast:
+`link.exe` is MSVC's and `rc.exe` is on `PATH`), the demo builds to a native binary two ways from the same code, as
+the fluid demo's does. Both are profile-gated, so ordinary builds stay fast:
 
 ```bash
 mvn -Pnative-release -pl vexelray-sim-rigid-demo -am package -DskipTests
@@ -85,13 +85,14 @@ mvn -Pnative -pl vexelray-sim-rigid-demo -am package -DskipTests
 ```
 
 - **release** gives `vexelray-sim-rigid-demo/target/rigid-sim.exe`: what ships, and what `installer.json` points at.
-  A Windows GUI subsystem program with no console window, built without the automation modules: `RigidDemoApp` is
-  compiled from `src/edition-release`, which names no `AutomationStarter`, so the binary cannot open a driving socket.
-- **debug** gives `vexelray-sim-rigid-demo/target/rigid-sim-debug.exe`: a console program with automation, so
-  `--automation=0` prints the port `ottermate --launch` reads. The plain JVM build, the tests and `exec:exec` are this
-  edition too.
+  A Windows GUI subsystem program with no console window; a socket's port is in its discovery file
+  (`~/.vexelray/automation/`), which `ottermate` reads.
+- **debug** gives `vexelray-sim-rigid-demo/target/rigid-sim-debug.exe`: a console program, so `--automation=0` prints
+  the port `ottermate --launch` reads.
 
-Both link the icon, `vexelray-sim-rigid-demo/src/main/rc/rigid-sim.ico`: `rigid-sim.svg` (the suite icon canvas's
+Both carry the framework's automation sockets, remote control and diagnostics, off until the launch asks
+(`--automation=0`, `VEXELRAY_AUTOMATION=0`) or the title bar's plug switches one on; `--automation.available=none`
+leaves them out of a run. Both link the icon, `vexelray-sim-rigid-demo/src/main/rc/rigid-sim.ico`: `rigid-sim.svg` (the suite icon canvas's
 Rigid experiments primary) rendered by `vex-suite-common`'s `tools/Ico.java`; the window, file and light variants are
 beside it. The libraries carry their own reachability metadata; what is this demo's own (its main class, LWJGL,
 SupirVast's bundled SPIR-V tools, JDK entries) is in `vexelray-sim-rigid-demo/src/main/resources/META-INF/native-image/`,
@@ -101,7 +102,7 @@ tried.
 
 ### Installer
 
-`installer.json` describes a per-user install of the release edition through
+`installer.json` describes a per-user install of the release build through
 [`vexelray-installer`](https://github.com/sibarum/vexelray-installer), as the fluid demo's does: `rigid-sim.exe` with
 its icon, Start menu and desktop shortcuts and an Apps entry. The installer scripts and the binaries are published
 from [`vexelray-dist`](https://github.com/sibarum/vexelray-dist) (`apps/rigid-sim/`, releases tagged
