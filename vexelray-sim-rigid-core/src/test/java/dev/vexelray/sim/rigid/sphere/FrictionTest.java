@@ -154,6 +154,71 @@ class FrictionTest {
         return scene;
     }
 
+    /**
+     * A sphere on a 20° slope, against a fixed one below it on the slope: it rests only while friction at the floor
+     * and at the other sphere both hold it, every substep, against gravity's new pull. Measured before contacts kept
+     * their impulses from substep to substep, and before friction waited for every contact to be parted: it spun in
+     * place at 4.5e-4 rad/s, its centre at 1.2e-5 m/s, and never stopped. Since, both wander at the noise of its
+     * position in f32, 1.5e-8 m at 0.2 m, which is 9e-6 m/s in a substep: within 3e-5 rad/s and 2e-6 m/s.
+     */
+    @ParameterizedTest
+    @EnumSource(Backend.class)
+    void aSphereWedgedOnASlopeRests(Backend backend) {
+        double theta = Math.toRadians(20);
+        try (Scene scene = new Scene(2).uniform(0.03, 0.1)) {
+            scene.solve = SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT;
+            scene.muStatic = scene.muKinetic = 0.5;
+            scene.sx = scene.sy = scene.sz = 0.5;
+            scene.gx = G * Math.sin(theta);
+            scene.gy = -G * Math.cos(theta);
+            scene.x[0] = 0.2f;
+            scene.x[1] = 0.26f;
+            scene.y[0] = scene.y[1] = 0.03f;
+            scene.z[0] = scene.z[1] = 0.25f;
+            scene.im[1] = 0;
+            scene.start(backend).advanceSeconds(1);
+            scene.read();
+            assertTrue(Math.abs(scene.az[0]) < 1.5e-4, "not spinning in place: " + scene.az[0] + " rad/s");
+            assertTrue(Math.hypot(scene.u[0], scene.v[0]) < 5e-6, "still: " + scene.u[0] + ", " + scene.v[0]);
+            assertEquals(0.2, scene.x[0], 1e-5, "where it was put");
+        }
+    }
+
+    /**
+     * A sphere set spinning in the pocket of three fixed ones, which its normals alone hold up: friction stops the
+     * spin and then has nothing to do. Measured when each contact rubbed straight after its own normal correction:
+     * friction took the part of gravity's pull that the other contacts' normals were about to take, more every
+     * substep, until it sat at the edge of the cone and slid, and the sphere spun at 4.5e-2 rad/s for as long as it
+     * was let; since, 3e-4 rad/s.
+     */
+    @ParameterizedTest
+    @EnumSource(Backend.class)
+    void aSphereInAPocketStopsSpinning(Backend backend) {
+        double r = 0.03;
+        try (Scene scene = new Scene(4).uniform(r, 0.1)) {
+            scene.solve = SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT;
+            scene.muStatic = scene.muKinetic = 0.5;
+            scene.sx = scene.sy = scene.sz = 0.5;
+            double c = 0.25;
+            for (int k = 0; k < 3; k++) {
+                double angle = 2 * Math.PI * k / 3;
+                scene.x[k] = (float) (c + 2 * r / Math.sqrt(3) * Math.cos(angle));
+                scene.z[k] = (float) (c + 2 * r / Math.sqrt(3) * Math.sin(angle));
+                scene.y[k] = (float) r;
+                scene.im[k] = 0;
+            }
+            scene.x[3] = scene.z[3] = (float) c;
+            scene.y[3] = (float) (r + 2 * r * Math.sqrt(2.0 / 3));
+            scene.ax[3] = 1;
+            scene.ay[3] = 2;
+            scene.az[3] = 3;
+            scene.start(backend).advanceSeconds(1);
+            scene.read();
+            double spin = Math.sqrt(scene.ax[3] * scene.ax[3] + scene.ay[3] * scene.ay[3] + scene.az[3] * scene.az[3]);
+            assertTrue(spin < 2e-3, "stopped spinning: " + spin + " rad/s");
+        }
+    }
+
     /** A column of ten with friction rests as it does without: friction must not stir what is still. */
     @ParameterizedTest
     @EnumSource(Backend.class)

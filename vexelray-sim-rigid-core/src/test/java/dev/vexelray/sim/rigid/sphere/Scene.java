@@ -107,6 +107,7 @@ final class Scene implements AutoCloseable {
         step = new SphereStep(n, substeps, iterations, gridded ? SphereGrid.covering(sx, sy, sz, widest()) : null,
                 solve, rounds, SphereStep.CONTACTS_PER_SPHERE);
         stepper = new SphereStepper(step);
+        stepper.friction(muStatic + muKinetic > 0);
         if (backend == Backend.CPU) {
             runner = PassRunner.cpu(step, Spheres.WORKGROUP, PassRunner.NO_SUBGROUP);
         } else {
@@ -188,6 +189,16 @@ final class Scene implements AutoCloseable {
     float[] orientation(int s) {
         return new float[] {runner.floats("qx")[s], runner.floats("qy")[s], runner.floats("qz")[s],
                 runner.floats("qw")[s]};
+    }
+
+    /** Any float buffer of the step as it is on the backend now. */
+    float[] floats(String name) {
+        return runner.floats(name);
+    }
+
+    /** Any int buffer of the step as it is on the backend now. */
+    int[] ints(String name) {
+        return runner.read(name);
     }
 
     /** The picture's buffer as it is on the backend now, {@link Spheres#SHOWN_STRIDE} floats a sphere. */

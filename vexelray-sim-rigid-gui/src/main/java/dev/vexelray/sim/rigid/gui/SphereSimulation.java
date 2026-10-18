@@ -92,7 +92,7 @@ public final class SphereSimulation implements AutoCloseable {
         this.stepper = new SphereStepper(step);
         runner.prepare(step.step());
         if (step.untilDone()) {
-            runner.prepare(step.opening(0, 0, SphereStep.BATCH));
+            runner.prepare(step.opening(0, 0, SphereStep.BATCH, 0));
         }
     }
 
@@ -149,6 +149,7 @@ public final class SphereSimulation implements AutoCloseable {
         runner.write("im", im);
         step.constants().forEach(runner::write);
         runner.write("params", params);
+        stepper.friction(Spheres.rubs(params));
         float[] shown = new float[Spheres.SHOWN_STRIDE * step.spheres];
         for (int s = 0; s < step.spheres; s++) {
             int base = Spheres.SHOWN_STRIDE * s;
@@ -163,6 +164,7 @@ public final class SphereSimulation implements AutoCloseable {
     /** New parameters ({@link Spheres#params}), from the next step on. */
     public void params(int[] params) {
         runner.write("params", params);
+        stepper.friction(Spheres.rubs(params));
     }
 
     /**

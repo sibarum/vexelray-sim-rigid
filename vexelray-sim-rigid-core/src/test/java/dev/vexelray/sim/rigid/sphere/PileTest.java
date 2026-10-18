@@ -4,6 +4,7 @@ import dev.vexelray.sim.rigid.sphere.Scene.Backend;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.Random;
 
@@ -63,6 +64,41 @@ class PileTest {
                         "energy grew: " + state + " from " + start);
             }
             assertTrue(worst < 0.2, "spheres passed into each other by " + worst + " of a radius");
+        }
+    }
+
+    /**
+     * Three hundred and forty-three spheres dropped with friction, μ = 0.5, at the demo's 10 substeps: once settled,
+     * the pile rests. Measured before contacts kept their impulses from substep to substep and before friction waited
+     * for every contact to be parted: from 4 s to 6 s it still lost 0.25–0.4 J of potential energy a second, with 0.02
+     * J moving, most of it spin. Since, 1e-4 J a second, and 3e-7 J moving.
+     */
+    @ParameterizedTest
+    @EnumSource(Backend.class)
+    void aPileWithFrictionComesToRest(Backend backend) {
+        int side = 7;
+        try (Scene scene = new Scene(side * side * side).uniform(0.03, 0.1)) {
+            scene.solve = SphereStep.Solve.GAUSS_SEIDEL_BY_CONTACT;
+            scene.muStatic = scene.muKinetic = 0.5;
+            scene.sx = scene.sz = 0.08 + 0.06 * side;
+            scene.sy = 0.5 + 0.07 * side;
+            Random random = new Random(7);
+            int k = 0;
+            for (int i = 0; i < side; i++) {
+                for (int j = 0; j < side; j++) {
+                    for (int l = 0; l < side; l++, k++) {
+                        scene.x[k] = (float) (0.07 + 0.06 * i + 0.005 * random.nextDouble());
+                        scene.y[k] = (float) (0.3 + 0.07 * j);
+                        scene.z[k] = (float) (0.07 + 0.06 * l + 0.005 * random.nextDouble());
+                    }
+                }
+            }
+            scene.start(backend).advanceSeconds(4);
+            double settled = scene.diagnostics().potential();
+            SphereDiagnostics later = scene.advanceSeconds(2).diagnostics();
+            double creep = (settled - later.potential()) / 2;
+            assertTrue(creep < 5e-3, "still creeping, " + creep + " J a second: " + later);
+            assertTrue(later.kinetic() < 1e-4, "at rest: " + later);
         }
     }
 }

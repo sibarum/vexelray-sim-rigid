@@ -32,7 +32,8 @@ invocation per contact, rests the column with under a millionth of Jacobi's movi
 On a pile of 4096 it costs 1.2 ms a step at 10 substeps, about twice what Jacobi costs for the same overlap. The
 demo offers both, on the grid, and Gauss–Seidel there runs until every contact is solved. Spheres carry a spin and an
 orientation, and Gauss–Seidel's contacts have Coulomb friction: a sliding sphere settles into rolling at 5/7 of its
-speed, and one on a slope rolls or slides as theory says. A pile with friction does not yet quite rest; it creeps.
+speed, and one on a slope rolls or slides as theory says. A pile with friction rests: each contact keeps what it
+took from one substep to the next and starts from it, and friction waits until every contact is parted.
 Contacts bounce as much as the restitution asked for.
 
 The physics timing in [docs/physics-timing.md](docs/physics-timing.md) is built: every contact solved every step,

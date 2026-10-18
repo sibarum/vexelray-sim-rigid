@@ -5,8 +5,10 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -67,7 +69,7 @@ class SphereStepperTest {
         assertEquals(3 * SphereStep.BATCH, report.rounds());
         assertEquals(0, report.unlisted());
         assertEquals(4, runner.segments.size(), "three openings and the closing");
-        assertSame(step.closing(), runner.segments.get(3));
+        assertSame(step.closing(SphereStep.BATCH), runner.segments.get(3), "the closing rubs as the last pass ran");
     }
 
     @Test
@@ -111,15 +113,42 @@ class SphereStepperTest {
     }
 
     @Test
-    void aLaterPassOpensWithTheWallsOfTheOneBefore() {
+    void aLaterPassOpensWithTheFrictionAndWallsOfTheOneBefore() {
         SphereStep step = step(2, 2);
         Needs runner = new Needs(1);
         new SphereStepper(step).step(runner);
         List<String> firsts = runner.segments.stream().map(s -> s.get(0).name()).toList();
-        assertEquals(List.of("predict", "walls", "walls", "walls", "walls"), firsts);
+        assertEquals(List.of("predict", "rub 0", "rub 0", "rub 0", "rub 0"), firsts);
+        for (List<Pass> segment : runner.segments.subList(1, runner.segments.size())) {
+            List<Pass> rubs = segment.stream().filter(p -> p.name().startsWith("rub")).toList();
+            assertEquals(SphereStep.BATCH, rubs.size(), "as many rounds as the pass before parted in");
+            assertEquals("walls", segment.get(rubs.size()).name(), "then its walls");
+        }
         assertEquals(List.of("walls", "velocity", "bounce", "bounced", "predict"),
-                runner.segments.get(2).subList(0, 5).stream().map(Pass::name).toList(),
+                runner.segments.get(2).subList(SphereStep.BATCH, SphereStep.BATCH + 5).stream().map(Pass::name)
+                        .toList(),
                 "a new substep closes the last one, restitution and all, before it predicts");
+    }
+
+    @Test
+    void aPassRubsWithTheDispatchesItPartedWith() {
+        SphereStep step = step(1, 1);
+        Needs runner = new Needs(SphereStep.BATCH + 1);
+        new SphereStepper(step).step(runner);
+        List<Pass> closing = runner.segments.get(runner.segments.size() - 1);
+        List<String> rubs = closing.stream().filter(p -> p.name().startsWith("rub"))
+                .map(p -> p.buffers().get(Spheres.ROUND_CHECKED + 3)).toList();
+        assertEquals(runner.rounds.stream().map(kind -> kind.replace("cycle", "rubs")).toList(), rubs);
+        Map<String, int[]> constants = step.constants();
+        for (String kind : runner.rounds) {
+            int[] parts = constants.get(kind);
+            int[] rubbing = constants.get(kind.replace("cycle", "rubs"));
+            assertEquals(parts[3], rubbing[3], "the same dispatch, so the same claims");
+            assertEquals(parts[5], rubbing[5]);
+            assertEquals(0, parts[6]);
+            assertEquals(1, rubbing[6]);
+            assertNotEquals(parts[2], rubbing[2], "a pass of its own, so every contact is open again");
+        }
     }
 
     @Test

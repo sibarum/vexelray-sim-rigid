@@ -82,6 +82,8 @@ public final class SphereStep implements Buffered {
     /** Per pass of a substep, the rounds at each of the cycle's positions, and the report after each. */
     private final List<List<Pass>> cycle = new ArrayList<>();
     private final List<List<Pass>> reports = new ArrayList<>();
+    /** Per pass of a substep, its friction's rounds at each of the cycle's positions: {@link #rubs}. */
+    private final List<List<Pass>> rubbing = new ArrayList<>();
     /** Segments made so far, by what they are: a runner records each once and keeps it by identity. */
     private final Map<String, List<Pass>> segments = new java.util.HashMap<>();
 
@@ -219,6 +221,23 @@ public final class SphereStep implements Buffered {
             buffers.put(name, new BufferSpec(name, Body.I32, capacity));
         }
         buffers.put("contactCount", new BufferSpec("contactCount", Body.I32, Spheres.CONTACT_COUNT_WORDS));
+        for (String name : List.of("contactImpulse", "keptImpulse")) {
+            buffers.put(name, new BufferSpec(name, Body.F32, capacity * Spheres.IMPULSE_WORDS));
+        }
+        buffers.put("wallImpulse", new BufferSpec("wallImpulse", Body.F32, spheres * Spheres.WALL_IMPULSE_WORDS));
+        for (String name : List.of("contactNext", "keptB", "keptNext")) {
+            buffers.put(name, new BufferSpec(name, Body.I32, capacity));
+        }
+        for (String name : List.of("contactHead", "keptHead")) {
+            buffers.put(name, new BufferSpec(name, Body.I32, spheres));
+        }
+        int[] none = new int[spheres];
+        java.util.Arrays.fill(none, -1);
+        constants.put("contactHead", none);
+        prepare.add(new Pass("warmWalls", Spheres.warmWalls(), Spheres.WARM_WALLS_BUFFERS,
+                List.of(Spheres.WARM_WALLS_NAMES), spheres));
+        prepare.add(new Pass("keepContacts", Spheres.keepContacts(spheres, capacity), Spheres.KEEP_CONTACT_BUFFERS,
+                List.of(Spheres.KEEP_CONTACT_NAMES), capacity));
         prepare.add(new Pass("clearContacts", Spheres.clearContacts(), Spheres.CLEAR_BUFFERS,
                 List.of(Spheres.CLEAR_NAMES), spheres));
         prepare.add(new Pass("listContacts", Spheres.listContacts(grid, capacity), Spheres.LIST_BUFFERS,
@@ -229,16 +248,31 @@ public final class SphereStep implements Buffered {
         int g = 0;
         for (int it = 0; it < iterations; it++) {
             List<Pass> passes = new ArrayList<>();
+            // Parting only: friction is run with a pass run until done, which knows how many rounds it took.
             for (int k = 0; k <= rounds; k++, g++) {
                 String kind = "round" + g;
                 buffers.put(kind, new BufferSpec(kind, Body.I32, Spheres.ROUND_WORDS));
-                constants.put(kind, new int[] {k == 0 ? 0 : 1, k == rounds ? 0 : 1, it + 1, g, g % 2, g - 1});
+                constants.put(kind, new int[] {k == 0 ? 0 : 1, k == rounds ? 0 : 1, it + 1, g, g % 2, g - 1, 0});
                 passes.add(new Pass("round " + k, round, Spheres.ROUND_BUFFERS, roundNames(g, kind), capacity));
             }
             passes.add(walls);
             iteration.add(passes);
         }
         cycle(round);
+    }
+
+    /**
+     * A pass's friction ({@link Spheres#contact}), which opens the segment after it: {@code rounds} rounds of pass
+     * {@code iteration}, the number its parting took, with the same dispatches and so the same claims, each contact
+     * rubbing as it was parted. A round's claims depend only on the list and the dispatch, so these finish as the
+     * parting did, and need no report and no wait.
+     */
+    private List<Pass> rubs(int iteration, int rounds) {
+        List<Pass> passes = new ArrayList<>();
+        for (int r = 0; r < rounds; r++) {
+            passes.add(rubbing.get(iteration).get(position(r)));
+        }
+        return passes;
     }
 
     /**
@@ -253,14 +287,20 @@ public final class SphereStep implements Buffered {
         Pass report = null;
         for (int it = 0; it < iterations; it++) {
             List<Pass> rounds = new ArrayList<>();
+            List<Pass> rubs = new ArrayList<>();
             List<Pass> after = new ArrayList<>();
             for (int p = 0; p <= CYCLE; p++) {
                 String kind = "cycle" + it + "." + p;
+                String rubKind = "rubs" + it + "." + p;
                 int dispatch = it * CYCLE + p % CYCLE;
                 int checks = it * CYCLE + Math.max(p - 1, 0) % CYCLE;
                 buffers.put(kind, new BufferSpec(kind, Body.I32, Spheres.ROUND_WORDS));
-                constants.put(kind, new int[] {p == 0 ? 0 : 1, 1, it + 1, dispatch, p % 2, checks});
+                buffers.put(rubKind, new BufferSpec(rubKind, Body.I32, Spheres.ROUND_WORDS));
+                constants.put(kind, new int[] {p == 0 ? 0 : 1, 1, it + 1, dispatch, p % 2, checks, 0});
+                constants.put(rubKind, new int[] {p == 0 ? 0 : 1, 1, iterations + it + 1, dispatch, p % 2, checks,
+                        1});
                 rounds.add(new Pass("round " + p, round, Spheres.ROUND_BUFFERS, roundNames(p, kind), capacity));
+                rubs.add(new Pass("rub " + p, round, Spheres.ROUND_BUFFERS, roundNames(p, rubKind), capacity));
                 if (report == null) {
                     report = new Pass("report", Spheres.report(), Spheres.REPORT_BUFFERS,
                             List.of(Spheres.REPORT_NAMES), 1);
@@ -269,6 +309,7 @@ public final class SphereStep implements Buffered {
                         List.of("open", "contactCount", kind, "readout"), 1));
             }
             cycle.add(List.copyOf(rounds));
+            rubbing.add(List.copyOf(rubs));
             reports.add(List.copyOf(after));
         }
     }
@@ -299,15 +340,16 @@ public final class SphereStep implements Buffered {
 
     /**
      * The segment that opens pass {@code iteration} of substep {@code substep}, ending in its first {@code rounds}
-     * rounds and a report. Before them, what comes between the last segment and this one: for the first pass of a
-     * substep, the substep before it closed (walls, velocity) unless this is the first, then predict and the sort and
-     * the list; for a later pass, the walls of the one before.
+     * rounds and a report. Before them, what comes between the last segment and this one: the friction of the pass
+     * before, {@code rubbed} rounds of it ({@link #rubs}), unless this is the step's first pass; then for the first
+     * pass of a substep, the substep before it closed (walls, velocity) unless this is the first, then predict and the
+     * sort and the list; for a later pass, the walls of the one before.
      */
-    public List<Pass> opening(int substep, int iteration, int rounds) {
+    public List<Pass> opening(int substep, int iteration, int rounds, int rubbed) {
         requireUntilDone();
-        String key = "open " + Math.min(substep, 1) + " " + iteration + " " + rounds;
+        String key = "open " + Math.min(substep, 1) + " " + iteration + " " + rounds + " " + rubbed;
         return segments.computeIfAbsent(key, k -> {
-            List<Pass> passes = new ArrayList<>();
+            List<Pass> passes = new ArrayList<>(rubs(iteration == 0 ? iterations - 1 : iteration - 1, rubbed));
             if (iteration > 0) {
                 passes.add(walls);
             } else {
@@ -334,11 +376,15 @@ public final class SphereStep implements Buffered {
         });
     }
 
-    /** What ends a step once its last pass is done: the walls, velocity, and the picture's buffer. */
-    public List<Pass> closing() {
+    /**
+     * What ends a step once its last pass is done: that pass's friction, {@code rubbed} rounds of it, the walls,
+     * velocity, and the picture's buffer.
+     */
+    public List<Pass> closing(int rubbed) {
         requireUntilDone();
-        return segments.computeIfAbsent("close", k -> {
-            List<Pass> passes = new ArrayList<>(List.of(walls));
+        return segments.computeIfAbsent("close " + rubbed, k -> {
+            List<Pass> passes = new ArrayList<>(rubs(iterations - 1, rubbed));
+            passes.add(walls);
             passes.addAll(velocity);
             passes.add(show);
             return List.copyOf(passes);
@@ -378,7 +424,8 @@ public final class SphereStep implements Buffered {
      * One step: per substep, predict, then the sort if there is a grid, and the contact list if the solve wants
      * one; then {@link #iterations} passes of the solve — solve and apply for Jacobi, the rounds and
      * then the walls for Gauss–Seidel — then velocity, and restitution; and once at the end, {@link Spheres#show show}, for a
-     * picture.
+     * picture. Gauss–Seidel's passes here part their contacts and do not rub: friction is run with {@link #opening},
+     * which knows how many rounds a pass took.
      */
     public List<Pass> step() {
         return step;

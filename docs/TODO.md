@@ -274,7 +274,67 @@ contacts a step unsolved on the pile of 4096.
         Four iterations, or 40 substeps, cut what is moving tenfold and hold a taller pile, but leave the creep at
         about the same rate, so it is not friction's convergence. Next to look at, before rolling resistance: a
         contact that a substep corrects by nothing, because an earlier contact in the order has parted it, has
-        `λₙ = 0` and no friction that substep, whatever weight it carries.
+        `λₙ = 0` and no friction that substep, whatever weight it carries. (Answered below: that was one of three
+        faults, and it was friction's convergence.)
+  - [x] **A pile with friction rests** (2026-10-18). `CreepTest` (`-Drigid.creep=true`) took the creep apart on
+        cases of a few spheres whose answer is known: a sphere wedged on a 20° slope against a fixed one, a sphere
+        in a pocket of three fixed ones, and a free pyramid of four, which by statics stands at μ = 0.5 with
+        friction `tan(α/2) = 0.32` of the normal at its upper contacts and 0.08 at the floor. Full static friction
+        changed nothing (μ = 1 and 3 read as 0.5, to the digit), so it was never Coulomb's limit. Three faults:
+
+        1. **A later pass gave no friction.** A contact's `λₙ` was what that pass's correction moved it, and a pass
+           after the first finds a resting contact already parted: one pass and four left the wedged sphere the same
+           to the last digit. Each contact and each wall now keeps what it has taken this substep, normal and
+           tangential, in position terms (`contactImpulse`, `wallImpulse`). Friction clamps the whole tangential
+           impulse to `μ` times the whole normal one, as sequential impulses do, and applies only the change; the
+           whole normal is kept from falling below zero, so a pass can draw a pair back by no more than it has
+           pushed. More passes now help friction: at 8 the free pyramid stands, where at any count it fell.
+        2. **Friction ran too early.** Each contact rubbed straight after its own normal correction, and so found,
+           as slip, the part of gravity's pull that the contacts after it were about to take along their normals,
+           and took it as friction. The sphere in the pocket, which its normals alone hold, had its friction grow
+           every substep until it sat on the cone's edge, `|p| = μ λₙ`, and slid, spinning at 4.5e-2 rad/s for as
+           long as it ran. A pass now parts every contact first, then rubs them, in the same rounds over again:
+           a round's claims depend only on the list and the dispatch, so the rubbing takes exactly the rounds the
+           parting took, which the stepper knows from its report, and needs no wait of its own. They open the next
+           segment. A pocket's spin falls to 3e-4 rad/s.
+        3. **Every substep started from nothing.** One pass or two never catch up with gravity's new pull where
+           friction carries part of a pile's weight. The pyramid rolled apart while the impulses it found were the
+           ones statics asks for (`λₙ = m g h² / 3` at an upper contact, friction 0.34 of it), slower at more
+           substeps in proportion: an `O(g h)` error each substep, not a sliding mode. `keepContacts` keeps the list
+           a substep; `listContacts` chains each sphere's contacts by an atomic exchange, and walks a pair's lower
+           sphere's chain to find what the pair took; `warm` and `warmWalls` apply it before anything is solved. The
+           walls needed it as much as the contacts: without, the floor's push and friction came after every contact,
+           and the pyramid's feet rolled outward at 6 mm/s.
+
+        **The warm start is all or nothing.** At 0.9, 0.8 or 0.5 of the impulse a pile creeps again, 0.1–0.3 J a
+        second; normals left cold and only friction warmed, worse than before, 0.6 J a second. **And it is for
+        friction only.** Warm, a frictionless column rang for seconds, 2.7e-3 J at 1 s and 4.2e-6 J at 3 s, where
+        cold it rests at 1e-8 J: carried over, the load overshoots, and nothing damps it but the solve. So without
+        friction there is no warm start and no rubbing (`Spheres.rubs` tells the stepper), and the solve is the one
+        before.
+
+        **Measured**, GPU, the sweep on the commit before and after, 3 or 4 s, until done; overlap / moving energy
+        (spin) / spheres faster than 1 cm/s / ms a step:
+
+        | Scene, μ = 0.5 | Substeps | Before | After |
+        | --- | --- | --- | --- |
+        | Column of 20 | 10 | 2.1% / 7.6e-9 J / 0 / 1.46 | 1.4% / 4.3e-6 J / 0 / 1.83 |
+        | Pile of 343 | 10 | 3.9% / 3.5e-2 J (2.4e-2) / 168 / 1.75 | 2.5% / 2.3e-6 J (1.1e-6) / 0 / 2.39 |
+        | Pile of 343 | 20 | 0.92% / 8.3e-3 J (6.4e-3) / 54 / 3.43 | 0.62% / 5.9e-6 J (3.2e-6) / 0 / 4.76 |
+        | Pile of 4096 | 10 | 11% / 1.6 J (1.4) / 3420 / 2.20 | 7.9% / 4.9e-5 J (3.0e-5) / 0 / 3.04 |
+        | Pile of 4096 | 20 | 3.1% / 0.54 J (0.47) / 2463 / 3.95 | 2.1% / 5.3e-4 J (4.0e-4) / 2 / 5.60 |
+
+        The piles stand taller (343: top at 0.334 m, from 0.305), and `CreepTest`'s pile of 343 at 10 × 1 loses
+        9e-5 J of potential energy a second from 4 s to 6 s, against 0.25–0.4 J; every listed contact is rubbed in
+        the rounds its parting took. Friction costs 35–40% more a step, the rubbing's rounds. Without friction every
+        state of the sweep is the same as before to the last digit, at 20–30% more a step on the piles (4096 at 10:
+        2.66 ms, from 2.18): the bigger round kernel, and two more passes a substep that keep and warm what nothing
+        uses. Leaving those out without friction is the next cheap thing, if the frictionless cost matters. The
+        column with friction rests a little less still than it did (4.3e-6 J), the warm start's ringing, damped.
+
+        **What does not hold yet: the free pyramid at one pass.** Its top's weight sloshes from contact to contact,
+        all of it on one at a time, and the pyramid falls as it did before. Two passes stand it, drifting 1.7 mm/s
+        as a whole; at eight it creeps at 0.3 mm/s.
 - [x] **Spheres squashed by what presses them** (2026-10-09), in the picture only. `Spheres.show` measures each
       sphere's overlaps at the end of a step, with spheres and walls, as a flattening `Σ f n nᵀ` and a lean `Σ f n`,
       `f` the sphere's share of the overlap over its radius; `shown` grows to 32 floats a sphere to hold them before

@@ -52,6 +52,8 @@ public final class SphereStepper {
     /** Per pass of a substep: the rounds its opening batch runs, and how many passes in a row it has been enough. */
     private final int[] opening;
     private final int[] enough;
+    /** Whether passes rub: without friction their rounds would find nothing to do, and are not run. */
+    private boolean friction = true;
 
     public SphereStepper(SphereStep step) {
         this.step = step;
@@ -70,13 +72,15 @@ public final class SphereStepper {
         int rounds = 0;
         int most = 0;
         int unlisted = 0;
+        // The rounds the pass before took, whose friction opens the next segment: none before the step's first.
+        int rubbed = 0;
         // Each round solves at least the open contact of highest priority, so a pass needs no more rounds than the
         // list is long; past that, something is wrong with the rounds rather than the scene.
         int limit = step.capacity + 2 * SphereStep.CYCLE;
         for (int sub = 0; sub < step.substeps; sub++) {
             for (int it = 0; it < step.iterations; it++) {
                 int k = opening[it];
-                int[] read = runner.runAndRead(step.opening(sub, it, k));
+                int[] read = runner.runAndRead(step.opening(sub, it, k, rubbed));
                 waits++;
                 while (read[Spheres.READ_OPEN] != 0) {
                     if (k > limit) {
@@ -87,14 +91,23 @@ public final class SphereStepper {
                     k += SphereStep.BATCH;
                     waits++;
                 }
+                rubbed = friction ? k : 0;
                 rounds += k;
                 most = Math.max(most, k);
                 unlisted += Math.max(0, read[Spheres.READ_LISTED] - step.capacity);
                 adapt(it, k);
             }
         }
-        runner.run(step.closing());
+        runner.run(step.closing(rubbed));
         return new Report(waits, rounds, most, unlisted);
+    }
+
+    /**
+     * Whether the parameters have friction ({@link Spheres#rubs}): without, a pass parts its contacts and runs no
+     * rounds of friction after.
+     */
+    public void friction(boolean on) {
+        friction = on;
     }
 
     /** The rounds pass {@code iteration}'s next opening batch runs. */

@@ -104,6 +104,14 @@ import static dev.supirvast.vastir.build.Body.v;
  * 27 colours of the grid's cells with one serial invocation a cell, was as right and five times the cost, and is
  * gone; {@code docs/TODO.md} keeps its measurements.
  *
+ * <p>A pass has two phases over the list: parting, which corrects the normals, then rubbing, which applies friction
+ * once every normal is corrected, in the same rounds over again ({@link #contact}). Each contact keeps what it has
+ * taken this substep, normal and tangential ({@code contactImpulse}), and each wall likewise ({@code wallImpulse}):
+ * friction clamps the whole of it, and the next substep starts from it. {@link #keepContacts} keeps the list a
+ * substep, {@link #listContacts} finds each pair's impulses in it again, and {@link #warm} and {@link #warmWalls}
+ * apply them before anything is solved: a pile then starts every substep carrying its weight, and the pass solves only
+ * what changed. Without that, a pile with friction never rested; {@code docs/TODO.md} has the measurements.
+ *
  * <h2>What it is not, yet</h2>
  *
  * <ul>
@@ -144,6 +152,7 @@ public final class Spheres {
 
     /** Below this squared distance two centres are taken as one point, which has no direction to part them along. */
     private static final float COINCIDENT = 1e-12f;
+
 
     private Spheres() {
     }
@@ -196,6 +205,14 @@ public final class Spheres {
         }
         return new int[] {bits(h), bits(gx), bits(gy), bits(gz), bits(sx), bits(sy), bits(sz), bits(omega),
                 bits(averaged ? 1 : 0), bits(restitution), bits(muStatic), bits(muKinetic)};
+    }
+
+    /**
+     * Whether {@code params} ({@link #params}) have friction: what a {@link SphereStepper} is told, so that it runs a
+     * pass's friction only where there is some.
+     */
+    public static boolean rubs(int[] params) {
+        return Float.intBitsToFloat(params[MU_STATIC]) + Float.intBitsToFloat(params[MU_KINETIC]) > 0;
     }
 
     // --- the buffers each pass binds, in order -------------------------------------------------------------
@@ -311,18 +328,27 @@ public final class Spheres {
     }
 
     /**
-     * Spheres {@code a} and {@code o} parted, if they overlap: each moved along the line between them by its share
-     * of {@code ω} times the overlap, by inverse mass, and each move added to what the constraints have moved it.
+     * Contact {@code c}, of spheres {@code a} and {@code o}, in one of a pass's two phases ({@code rubs} says which).
      *
-     * <p>Both at once, from one reading of their positions: so the two moves are equal and opposite by mass. Moving one
-     * sphere a turn, each by its share of the overlap it saw, was measured and is wrong: the second of a pair sees an
-     * overlap the first has shrunk, and a collision of 1 kg into 3 kg gained a quarter of its momentum.
+     * <p>Parting: in a substep's first pass, the pair's warm start ({@link #warm}); then each sphere moved along the
+     * line between them by its share of {@code ω} times the overlap, by inverse mass, and each move added to what the
+     * constraints have moved it. The normal impulse is kept as the substep's whole and never falls below zero, so a
+     * pair the warm start or an earlier pass parted too far is drawn back, by no more than it was pushed. Both at once,
+     * from one reading of their positions, so the two moves are equal and opposite by mass. Moving one sphere a turn,
+     * each by its share of the overlap it saw, was measured and is wrong: the second of a pair sees an overlap the
+     * first has shrunk, and a collision of 1 kg into 3 kg gained a quarter of its momentum.
      *
-     * <p>Then {@link #friction}, at the point on the line between the centres where the two spheres' surfaces would
-     * meet once parted, the point dividing that line by their radii: one point both spheres share, so the pair's
-     * angular momentum is kept.
+     * <p>Rubbing: {@link #friction}, once every contact of the pass has been parted, at the point on the line between
+     * the centres dividing it by their radii: one point both spheres share, so the pair's angular momentum is kept.
+     * Friction right after each contact's own parting, as it first was, finds the part of gravity's pull that later
+     * contacts would have taken along their normals and takes it as friction: a sphere in a pocket of three, which its
+     * normals hold, had its friction grow every substep until it slid at the cone's edge, spinning.
+     *
+     * <p>A listed pair is solved while it is as near as the list takes a contact, not only while it overlaps: a pair
+     * an earlier contact has parted still holds by friction, by the weight it carried earlier in the substep.
      */
-    private static void contact(Body b, LocalVar a, LocalVar o, Motion m, LocalVar omega) {
+    private static void contact(Body b, LocalVar c, LocalVar a, LocalVar o, Motion m, LocalVar omega, LocalVar pass,
+                                LocalVar rubs, Buffer impulses) {
         Buffer radius = m.radius;
         Buffer im = m.im;
         Held ha = Held.of(b, a, m.at, m.displaced, m.turned);
@@ -331,40 +357,130 @@ public final class Spheres {
         for (int axis = 0; axis < 3; axis++) {
             d[axis] = b.let("d", sub(v(ha.at[axis]), v(ho.at[axis])));
         }
-        LocalVar d2 = b.let("d2", add(mul(v(d[0]), v(d[0])), add(mul(v(d[1]), v(d[1])), mul(v(d[2]), v(d[2])))));
+        LocalVar d2 = b.let("d2", dot(d, d));
         LocalVar reach = b.let("reach", add(load(radius, v(a)), load(radius, v(o))));
         LocalVar wa = b.let("wa", load(im, v(a)));
         LocalVar wo = b.let("wo", load(im, v(o)));
         LocalVar wsum = b.let("wsum", add(v(wa), v(wo)));
-        b.when(lt(v(d2), mul(v(reach), v(reach))), near ->
+        LocalVar listed = b.let("listed", mul(v(reach), f(1 + LIST_MARGIN)));
+        b.when(lt(v(d2), mul(v(listed), v(listed))), near ->
                 near.when(gt(v(d2), f(COINCIDENT)), apart ->
                         apart.when(gt(v(wsum), f(0)), touching -> {
-                            LocalVar dist = touching.let("dist", sqrt(v(d2)));
-                            // The relaxed overlap per unit of the separation vector and of inverse mass.
-                            LocalVar k = touching.let("k", div(mul(v(omega), sub(v(reach), v(dist))),
-                                    mul(v(dist), v(wsum))));
-                            for (int axis = 0; axis < 3; axis++) {
-                                LocalVar step = touching.let("step", mul(v(k), v(d[axis])));
-                                LocalVar ma = touching.let("ma", mul(v(step), v(wa)));
-                                LocalVar mo = touching.let("mo", neg(mul(v(step), v(wo))));
-                                touching.set(ha.at[axis], add(v(ha.at[axis]), v(ma)));
-                                touching.set(ho.at[axis], add(v(ho.at[axis]), v(mo)));
-                                touching.set(ha.displaced[axis], add(v(ha.displaced[axis]), v(ma)));
-                                touching.set(ho.displaced[axis], add(v(ho.displaced[axis]), v(mo)));
-                            }
-                            LocalVar depth = touching.let("depth", mul(v(omega), sub(v(reach), v(dist))));
-                            LocalVar[] n = new LocalVar[3];
-                            for (int axis = 0; axis < 3; axis++) {
-                                n[axis] = touching.let("n", div(v(d[axis]), v(dist)));
-                            }
-                            // The centres as far apart as the move left them, divided at the radii.
-                            LocalVar share = touching.let("share", div(add(v(dist), v(depth)), v(reach)));
-                            friction(touching, m, ha, v(wa), mul(v(share), load(radius, v(a))),
-                                    ho, v(wo), mul(v(share), load(radius, v(o))), n,
-                                    div(v(depth), v(wsum)));
+                            Impulse taken = Impulse.of(touching, impulses, mul(v(c), i(Impulse.WORDS)));
+                            touching.when(eq(v(rubs), i(0)), parting -> {
+                                // The warm start, with friction; without, the substep starts from nothing, as a
+                                // frictionless pile rests best: warm, a column rang for seconds before it settled.
+                                LocalVar rubbing = parting.let("rubbing", add(load(m.params, i(MU_STATIC)),
+                                        load(m.params, i(MU_KINETIC))));
+                                parting.when(eq(v(pass), i(1)), first -> {
+                                    first.when(gt(v(rubbing), f(0)), warming ->
+                                            warm(warming, m, ha, wa, ho, wo, d, d2, reach, taken));
+                                    first.when(not(gt(v(rubbing), f(0))), cold -> {
+                                        cold.set(taken.normal, f(0));
+                                        for (int k = 0; k < 3; k++) {
+                                            cold.set(taken.p[k], f(0));
+                                        }
+                                    });
+                                });
+                                for (int axis = 0; axis < 3; axis++) {
+                                    parting.set(d[axis], sub(v(ha.at[axis]), v(ho.at[axis])));
+                                }
+                                LocalVar dist = parting.let("dist", sqrt(max(dot(d, d), f(COINCIDENT))));
+                                // The relaxed overlap, or a pull back by no more than the substep has pushed: in
+                                // the arithmetic the contact had before it kept its impulse, to the last bit, where
+                                // nothing has been taken yet.
+                                LocalVar depth = parting.let("depth", max(neg(mul(v(taken.normal), v(wsum))),
+                                        mul(v(omega), sub(v(reach), v(dist)))));
+                                parting.set(taken.normal, add(v(taken.normal), div(v(depth), v(wsum))));
+                                // The move per unit of the separation vector and of inverse mass.
+                                LocalVar k = parting.let("k", div(v(depth), mul(v(dist), v(wsum))));
+                                for (int axis = 0; axis < 3; axis++) {
+                                    LocalVar step = parting.let("step", mul(v(k), v(d[axis])));
+                                    LocalVar ma = parting.let("ma", mul(v(step), v(wa)));
+                                    LocalVar mo = parting.let("mo", neg(mul(v(step), v(wo))));
+                                    parting.set(ha.at[axis], add(v(ha.at[axis]), v(ma)));
+                                    parting.set(ho.at[axis], add(v(ho.at[axis]), v(mo)));
+                                    parting.set(ha.displaced[axis], add(v(ha.displaced[axis]), v(ma)));
+                                    parting.set(ho.displaced[axis], add(v(ho.displaced[axis]), v(mo)));
+                                }
+                            });
+                            touching.when(not(eq(v(rubs), i(0))), rubbing -> {
+                                LocalVar dist = rubbing.let("dist", sqrt(v(d2)));
+                                LocalVar[] n = new LocalVar[3];
+                                for (int axis = 0; axis < 3; axis++) {
+                                    n[axis] = rubbing.let("n", div(v(d[axis]), v(dist)));
+                                }
+                                LocalVar share = rubbing.let("share", div(v(dist), v(reach)));
+                                friction(rubbing, m, ha, v(wa), mul(v(share), load(radius, v(a))), ho, v(wo),
+                                        mul(v(share), load(radius, v(o))), n, taken);
+                            });
+                            taken.store(touching);
                             ha.store(touching);
                             ho.store(touching);
                         })));
+    }
+
+    /**
+     * A contact's warm start, in the first pass of a substep: the impulses the same pair took in the substep before
+     * ({@link #listContacts} found them), applied before anything is solved, the normal one along the normal the
+     * contact has now and the tangential one in its plane. A pile's contacts then start each substep carrying its
+     * weight, and the passes solve only what has changed; started from nothing, a pass or two never catch up with
+     * gravity's new pull, and a pile with friction creeps.
+     */
+    private static void warm(Body b, Motion m, Held a, LocalVar wa, Held o, LocalVar wo, LocalVar[] d, LocalVar d2,
+                             LocalVar reach, Impulse taken) {
+        LocalVar dist = b.let("warmDist", sqrt(v(d2)));
+        LocalVar[] n = new LocalVar[3];
+        for (int k = 0; k < 3; k++) {
+            n[k] = b.let("warmN", div(v(d[k]), v(dist)));
+        }
+        for (int k = 0; k < 3; k++) {
+            LocalVar push = b.let("warmPush", mul(v(taken.normal), v(n[k])));
+            LocalVar ma = b.let("ma", mul(v(push), v(wa)));
+            LocalVar mo = b.let("mo", neg(mul(v(push), v(wo))));
+            b.set(a.at[k], add(v(a.at[k]), v(ma)));
+            b.set(o.at[k], add(v(o.at[k]), v(mo)));
+            b.set(a.displaced[k], add(v(a.displaced[k]), v(ma)));
+            b.set(o.displaced[k], add(v(o.displaced[k]), v(mo)));
+        }
+        LocalVar along = b.let("warmAlong", dot(taken.p, n));
+        for (int k = 0; k < 3; k++) {
+            b.set(taken.p[k], sub(v(taken.p[k]), mul(v(along), v(n[k]))));
+        }
+        LocalVar share = b.let("warmShare", div(v(dist), v(reach)));
+        LocalVar ra = b.let("ra", load(m.radius, v(a.s)));
+        LocalVar ro = b.let("ro", load(m.radius, v(o.s)));
+        LocalVar turnsA = turnsPerImpulse(b, v(wa), mul(v(share), v(ra)), v(ra));
+        LocalVar turnsO = turnsPerImpulse(b, v(wo), mul(v(share), v(ro)), v(ro));
+        rub(b, a, wa, turnsA, o, wo, turnsO, n, taken.p);
+    }
+
+    /**
+     * What a contact has taken this substep, over every pass so far: its normal impulse {@code λₙ} and its tangential
+     * one {@code p}, both in position terms, as {@link #WORDS} floats from {@code at} in {@code buffer}. Friction clamps
+     * the whole of {@code p} to {@code μ λₙ}, not each pass's share, so a pass that finds a contact already parted
+     * still holds it by the weight it carried earlier in the substep.
+     */
+    private record Impulse(Buffer buffer, LocalVar at, LocalVar normal, LocalVar[] p) {
+
+        static final int WORDS = 4;
+
+        static Impulse of(Body b, Buffer buffer, Expr at) {
+            LocalVar base = b.let("impulseAt", at);
+            LocalVar normal = b.let("normalTaken", load(buffer, v(base)));
+            LocalVar[] p = new LocalVar[3];
+            for (int k = 0; k < 3; k++) {
+                p[k] = b.let("tangentTaken", load(buffer, add(v(base), i(1 + k))));
+            }
+            return new Impulse(buffer, base, normal, p);
+        }
+
+        void store(Body b) {
+            b.store(buffer, v(at), v(normal));
+            for (int k = 0; k < 3; k++) {
+                b.store(buffer, add(v(at), i(1 + k)), v(p[k]));
+            }
+        }
     }
 
     /**
@@ -414,22 +530,22 @@ public final class Spheres {
         }
     }
 
-    /** Below this squared slip, in square metres, a contact is taken not to slip at all, having no direction to. */
-    private static final float NO_SLIP = 1e-30f;
-
     /**
-     * Coulomb friction at a contact, as a move of position and a turn, after its normal correction: sphere {@code a}
-     * against sphere {@code o}, or against a wall if {@code o} is null, each as {@link Held} by the pass. {@code n} is
-     * the unit normal from {@code o} to {@code a}; the contact point is {@code leverA} from {@code a}'s centre along
-     * {@code −n} and {@code leverO} from {@code o}'s along {@code n}. {@code normal} is the contact's normal impulse in
-     * position terms, the move it just took over the two inverse masses: {@code λₙ = d / (wₐ + wₒ)}.
+     * Coulomb friction at a contact, as a move of position and a turn, once the pass has parted every contact: sphere
+     * {@code a} against sphere {@code o}, or against a wall if {@code o} is null, each as {@link Held} by the pass.
+     * {@code n} is the unit normal from {@code o} to {@code a}; the contact point is {@code leverA} from {@code a}'s
+     * centre along {@code −n} and {@code leverO} from {@code o}'s along {@code n}. {@code taken} is what the contact
+     * has taken this substep, in position terms, warm start included: its normal impulse {@code λₙ}, the moves it
+     * parted the pair by over their two inverse masses, and its tangential impulse {@code p}.
      *
      * <p>The slip is how far the two contact points have moved apart along the surface over the substep: each
      * centre's travel, {@code h v + dx}, and its turn, {@code h ω + t}, crossed with the lever, both added up as they
-     * were computed and none read back from positions. Removing it all takes a tangential impulse of
-     * {@code λₜ = |slip| / W}, where {@code W = Σ (w + r² / I)}: a sphere's inverse mass at a point off its centre,
-     * {@code 3.5 w} for a solid sphere at its surface. Static friction holds where {@code λₜ ≤ μs λₙ} and takes it
-     * all; past that the contact slides, and kinetic friction takes {@code μk λₙ}, never more than would stop it. A
+     * were computed and none read back from positions. Removing it all takes a further tangential impulse of
+     * {@code |slip| / W}, where {@code W = Σ (w + r² / I)}: a sphere's inverse mass at a point off its centre,
+     * {@code 3.5 w} for a solid sphere at its surface. The whole, {@code p} and that, is held while within
+     * {@code μs λₙ}; past that the contact slides, and the whole is cut to {@code μk λₙ}. Only the change is applied.
+     * The whole is clamped, not each pass's share of it, as sequential impulses do: so a pass that finds a contact
+     * already still holds it by what it took before, and one with no normal impulse left gives back any it took. A
      * contact resting under gravity takes {@code λₙ = m g h²} a substep and slips {@code g h²} along a slope, so the
      * slope holds below {@code tan θ = μs}; a sphere sliding on the floor loses {@code μk g h} of speed a substep and
      * gains {@code 5 μk g h / 2r} of spin: Coulomb's law with no velocity pass of its own.
@@ -439,19 +555,17 @@ public final class Spheres {
      * has no contact's {@code λₙ} to hand.
      */
     private static void friction(Body b, Motion m, Held a, Expr wa, Expr leverA, Held o, Expr wo, Expr leverO,
-                                 LocalVar[] n, Expr normal) {
+                                 LocalVar[] n, Impulse taken) {
         LocalVar muS = b.let("muS", load(m.params, i(MU_STATIC)));
         LocalVar muK = b.let("muK", load(m.params, i(MU_KINETIC)));
+        LocalVar lambdaN = taken.normal;
+        // With no normal impulse, a warm start's tangential one is taken back whole: clamped to μ · 0.
         b.when(gt(add(v(muS), v(muK)), f(0)), on -> {
             LocalVar h = on.let("h", load(m.params, i(H)));
-            LocalVar lambdaN = on.let("lambdaN", normal);
             LocalVar la = on.let("la", leverA);
             LocalVar[] slip = contactTravel(on, m, a, h, n, la, -1);
             LocalVar ia = on.let("ia", wa);
-            LocalVar ra = on.let("ra", load(m.radius, v(a.s)));
-            // A sphere's inverse inertia times its lever, which turns an impulse at the contact into a turn.
-            LocalVar leverOverIa = on.let("leverOverIa", div(mul(v(ia), v(la)),
-                    mul(f((float) INERTIA), mul(v(ra), v(ra)))));
+            LocalVar leverOverIa = turnsPerImpulse(on, v(ia), v(la), load(m.radius, v(a.s)));
             LocalVar weight = on.let("weight", add(v(ia), mul(v(leverOverIa), v(la))));
             LocalVar io = null;
             LocalVar lo = null;
@@ -463,9 +577,7 @@ public final class Spheres {
                 for (int k = 0; k < 3; k++) {
                     on.set(slip[k], sub(v(slip[k]), v(other[k])));
                 }
-                LocalVar ro = on.let("ro", load(m.radius, v(o.s)));
-                leverOverIo = on.let("leverOverIo", div(mul(v(io), v(lo)),
-                        mul(f((float) INERTIA), mul(v(ro), v(ro)))));
+                leverOverIo = turnsPerImpulse(on, v(io), v(lo), load(m.radius, v(o.s)));
                 on.set(weight, add(v(weight), add(v(io), mul(v(leverOverIo), v(lo)))));
             }
             LocalVar along = on.let("along", dot(slip, n));
@@ -473,36 +585,62 @@ public final class Spheres {
             for (int k = 0; k < 3; k++) {
                 tangent[k] = on.let("tangent", sub(v(slip[k]), mul(v(along), v(n[k]))));
             }
-            LocalVar t2 = on.let("t2", dot(tangent, tangent));
             LocalVar wo2 = io;
             LocalVar turnsO = leverOverIo;
-            on.when(and(gt(v(t2), f(NO_SLIP)), gt(v(weight), f(0))), slipping -> {
-                LocalVar length = slipping.let("length", sqrt(v(t2)));
-                // The impulse per unit of slip: all of it, or what kinetic friction allows, never more.
-                LocalVar per = slipping.let("per", div(f(1), v(weight)));
-                slipping.when(gt(div(v(length), v(weight)), mul(v(muS), v(lambdaN))), sliding ->
-                        sliding.set(per, min(v(per), div(mul(v(muK), v(lambdaN)), v(length)))));
+            on.when(gt(v(weight), f(0)), slipping -> {
+                // What has been taken so far, in the plane the contact has now, and the whole it would take to stop
+                // the slip: held whole while within μs λₙ, or cut to μk λₙ when not.
+                LocalVar takenAlong = slipping.let("takenAlong", dot(taken.p, n));
+                LocalVar[] before = new LocalVar[3];
+                LocalVar[] whole = new LocalVar[3];
+                for (int k = 0; k < 3; k++) {
+                    before[k] = slipping.let("before", sub(v(taken.p[k]), mul(v(takenAlong), v(n[k]))));
+                    whole[k] = slipping.let("whole", sub(v(before[k]), div(v(tangent[k]), v(weight))));
+                }
+                LocalVar size2 = slipping.let("size2", dot(whole, whole));
+                LocalVar holds = slipping.let("holds", mul(v(muS), v(lambdaN)));
+                slipping.when(gt(v(size2), mul(v(holds), v(holds))), sliding -> {
+                    LocalVar cut = sliding.let("cut", min(f(1), div(mul(v(muK), v(lambdaN)), sqrt(v(size2)))));
+                    for (int k = 0; k < 3; k++) {
+                        sliding.set(whole[k], mul(v(whole[k]), v(cut)));
+                    }
+                });
                 LocalVar[] p = new LocalVar[3];
                 for (int k = 0; k < 3; k++) {
-                    p[k] = slipping.let("p", neg(mul(v(per), v(tangent[k]))));
+                    p[k] = slipping.let("p", sub(v(whole[k]), v(before[k])));
+                    slipping.set(taken.p[k], v(whole[k]));
                 }
-                // The impulse p at a's contact point, −la n from its centre, turns it by I⁻¹ (−la n × p); and
-                // −p at o's, lo n from its centre, by I⁻¹ (lo n × −p): both −(lever / I) n × p.
-                LocalVar[] np = cross(slipping, n, p);
-                for (int k = 0; k < 3; k++) {
-                    LocalVar move = slipping.let("move", mul(v(ia), v(p[k])));
-                    slipping.set(a.at[k], add(v(a.at[k]), v(move)));
-                    slipping.set(a.displaced[k], add(v(a.displaced[k]), v(move)));
-                    slipping.set(a.turned[k], sub(v(a.turned[k]), mul(v(leverOverIa), v(np[k]))));
-                    if (o != null) {
-                        LocalVar back = slipping.let("back", mul(v(wo2), v(p[k])));
-                        slipping.set(o.at[k], sub(v(o.at[k]), v(back)));
-                        slipping.set(o.displaced[k], sub(v(o.displaced[k]), v(back)));
-                        slipping.set(o.turned[k], sub(v(o.turned[k]), mul(v(turnsO), v(np[k]))));
-                    }
-                }
+                rub(slipping, a, ia, leverOverIa, o, wo2, turnsO, n, p);
             });
         });
+    }
+
+    /**
+     * A tangential impulse {@code p}, in position terms, at a contact of normal {@code n}: {@code a} moved by
+     * {@code wa p} and {@code o}, if not a wall, by {@code −wo p}, each turned by its lever over its inertia. The
+     * impulse at a's contact point, {@code −la n} from its centre, turns it by {@code I⁻¹ (−la n × p)}; and {@code −p}
+     * at o's, {@code lo n} from its centre, by {@code I⁻¹ (lo n × −p)}: both {@code −(lever / I) n × p}.
+     */
+    private static void rub(Body b, Held a, LocalVar wa, LocalVar turnsA, Held o, LocalVar wo, LocalVar turnsO,
+                            LocalVar[] n, LocalVar[] p) {
+        LocalVar[] np = cross(b, n, p);
+        for (int k = 0; k < 3; k++) {
+            LocalVar move = b.let("move", mul(v(wa), v(p[k])));
+            b.set(a.at[k], add(v(a.at[k]), v(move)));
+            b.set(a.displaced[k], add(v(a.displaced[k]), v(move)));
+            b.set(a.turned[k], sub(v(a.turned[k]), mul(v(turnsA), v(np[k]))));
+            if (o != null) {
+                LocalVar back = b.let("back", mul(v(wo), v(p[k])));
+                b.set(o.at[k], sub(v(o.at[k]), v(back)));
+                b.set(o.displaced[k], sub(v(o.displaced[k]), v(back)));
+                b.set(o.turned[k], sub(v(o.turned[k]), mul(v(turnsO), v(np[k]))));
+            }
+        }
+    }
+
+    /** A sphere's inverse inertia times a lever: what turns an impulse at that lever into a turn. */
+    private static LocalVar turnsPerImpulse(Body b, Expr w, Expr lever, Expr radius) {
+        return b.let("turns", div(mul(w, lever), mul(f((float) INERTIA), mul(radius, radius))));
     }
 
     /**
@@ -604,9 +742,113 @@ public final class Spheres {
         return function("spheresClearContacts", b);
     }
 
+    static final String[] KEEP_CONTACT_NAMES = {"contactB", "contactNext", "contactHead", "contactImpulse", "keptB",
+            "keptNext", "keptHead", "keptImpulse", "contactCount"};
+    static final List<Buffer> KEEP_CONTACT_BUFFERS = bind(KEEP_CONTACT_NAMES, 0, "contactImpulse", "keptImpulse");
+
+    /**
+     * One invocation per place in the list, before the list is emptied: the last substep's list kept, as far as a
+     * new one needs it to find what each pair took, and each sphere's chain of its contacts with it ({@code kept…}).
+     * The chains start empty again, {@code −1}.
+     *
+     * <p>{@link #listContacts} chains every contact it lists to the others of its lower sphere: {@code contactHead}
+     * per sphere and {@code contactNext} per place, by an atomic exchange, so a pair can be found again by walking
+     * its lower sphere's few contacts, wherever in the list the atomic append put it.
+     */
+    public static Function keepContacts(int spheres, int capacity) {
+        List<Buffer> bs = KEEP_CONTACT_BUFFERS;
+        Body b = new Body();
+        LocalVar c = b.let("c", new Expr.InvocationId());
+        LocalVar listed = b.let("listed", load(bs.get(8), i(LISTED)));
+        b.when(gt(v(listed), i(capacity)), over -> over.set(listed, i(capacity)));
+        b.when(lt(v(c), v(listed)), kept -> {
+            kept.store(bs.get(4), v(c), load(bs.get(0), v(c)));
+            kept.store(bs.get(5), v(c), load(bs.get(1), v(c)));
+            for (int k = 0; k < Impulse.WORDS; k++) {
+                LocalVar word = kept.let("word", add(mul(v(c), i(Impulse.WORDS)), i(k)));
+                kept.store(bs.get(7), v(word), load(bs.get(3), v(word)));
+            }
+        });
+        b.when(lt(v(c), i(spheres)), sphere -> {
+            sphere.store(bs.get(6), v(c), load(bs.get(2), v(c)));
+            sphere.store(bs.get(2), v(c), i(-1));
+        });
+        return function("spheresKeepContacts", b);
+    }
+
+    static final String[] WARM_WALLS_NAMES = {"x", "y", "z", "r", "im", "dx", "dy", "dz", "params", "tx", "ty", "tz",
+            "wallImpulse"};
+    static final List<Buffer> WARM_WALLS_BUFFERS = bind(WARM_WALLS_NAMES);
+
+    /**
+     * One invocation per sphere, after predict: each wall's warm start, what it took in the substep before, applied
+     * while the sphere is still as near it as the list takes a contact — its push out along the wall's normal and its
+     * friction along it, which turns the sphere — and forgotten once the sphere has left it. {@link #walls} then solves
+     * only what has changed, as a contact's passes do after {@link #warm}.
+     */
+    public static Function warmWalls() {
+        List<Buffer> bs = WARM_WALLS_BUFFERS;
+        Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
+        Buffer[] displaced = {bs.get(5), bs.get(6), bs.get(7)};
+        Buffer[] turned = {bs.get(9), bs.get(10), bs.get(11)};
+        Buffer params = bs.get(8);
+        int[] extent = {SX, SY, SZ};
+        Body b = new Body();
+        LocalVar s = b.let("s", new Expr.InvocationId());
+        b.when(lt(v(s), new Expr.InvocationCount()), t -> t.when(gt(load(bs.get(4), v(s)), f(0)), free -> {
+            LocalVar r = free.let("r", load(bs.get(3), v(s)));
+            LocalVar w = free.let("w", load(bs.get(4), v(s)));
+            LocalVar turns = turnsPerImpulse(free, v(w), v(r), v(r));
+            Held held = Held.of(free, s, at, displaced, turned);
+            LocalVar rubbing = free.let("rubbing", add(load(params, i(MU_STATIC)), load(params, i(MU_KINETIC))));
+            for (int a = 0; a < 3; a++) {
+                int axis = a;
+                Impulse taken = Impulse.of(free, bs.get(12),
+                        add(mul(v(s), i(WALL_IMPULSE_WORDS)), i(axis * Impulse.WORDS)));
+                LocalVar reach = free.let("reach", mul(v(r), f(1 + LIST_MARGIN)));
+                LocalVar position = held.at[axis];
+                LocalVar out = free.let("out", f(0));
+                free.when(lt(v(position), v(reach)), low -> low.set(out, f(1)));
+                free.when(gt(v(position), sub(load(params, i(extent[axis])), v(reach))), high -> high.set(out, f(-1)));
+                // Forgotten once the sphere has left the wall, and without friction, when nothing needs it.
+                free.when(not(and(gt(v(rubbing), f(0)), not(eq(v(out), f(0))))), gone -> {
+                    gone.set(taken.normal, f(0));
+                    for (int k = 0; k < 3; k++) {
+                        gone.set(taken.p[k], f(0));
+                    }
+                });
+                free.when(and(gt(v(rubbing), f(0)), not(eq(v(out), f(0)))), near -> {
+                    LocalVar push = near.let("push", mul(mul(v(taken.normal), v(w)), v(out)));
+                    near.set(held.at[axis], add(v(held.at[axis]), v(push)));
+                    near.set(held.displaced[axis], add(v(held.displaced[axis]), v(push)));
+                    // Friction acts along the wall: nothing of it along the normal.
+                    near.set(taken.p[axis], f(0));
+                    LocalVar[] n = new LocalVar[3];
+                    for (int k = 0; k < 3; k++) {
+                        n[k] = near.let("n", k == axis ? v(out) : f(0));
+                    }
+                    rub(near, held, w, turns, null, null, null, n, taken.p);
+                });
+                taken.store(free);
+            }
+            held.store(free);
+        }));
+        return function("spheresWarmWalls", b);
+    }
+
+    /** The most of one sphere's kept contacts a pair's search walks: twelve touch a sphere, and this is past it. */
+    private static final int MOST_KEPT = 32;
+
     static final String[] LIST_NAMES = {"x", "y", "z", "r", "keys", "starts", "order", "contactA", "contactB",
-            "contactDone", "contactCount"};
-    static final List<Buffer> LIST_BUFFERS = bind(LIST_NAMES, 4);
+            "contactDone", "contactCount", "contactImpulse", "contactNext", "contactHead", "keptB",
+            "keptNext", "keptHead", "keptImpulse"};
+    static final List<Buffer> LIST_BUFFERS = bind(LIST_NAMES, 4, "contactImpulse", "keptImpulse");
+
+    /** Words of {@code wallImpulse} a sphere: an {@link Impulse} for the wall it may touch along each axis. */
+    public static final int WALL_IMPULSE_WORDS = 3 * Impulse.WORDS;
+
+    /** Words of {@code contactImpulse} and {@code keptImpulse} a place in the list: one {@link Impulse}. */
+    public static final int IMPULSE_WORDS = Impulse.WORDS;
 
     /**
      * One invocation per sphere, after the sort: every sphere within {@link #LIST_MARGIN} of touching it, with a
@@ -647,6 +889,29 @@ public final class Spheres {
                         fits.store(bs.get(7), v(slot), v(a));
                         fits.store(bs.get(8), v(slot), v(o));
                         fits.store(bs.get(9), v(slot), i(0));
+                        fits.store(bs.get(12), v(slot),
+                                v(fits.fetchAtomic("next", AtomicOp.EXCHANGE, bs.get(13), v(a), v(slot))));
+                        // What the pair took last substep, if it was listed then: its warm start.
+                        LocalVar[] warmth = new LocalVar[Impulse.WORDS];
+                        for (int k = 0; k < Impulse.WORDS; k++) {
+                            warmth[k] = fits.let("warmth", f(0));
+                        }
+                        LocalVar j = fits.let("j", load(bs.get(16), v(a)));
+                        LocalVar walked = fits.let("walked", i(0));
+                        fits.loop(and(not(lt(v(j), i(0))), lt(v(walked), i(MOST_KEPT))), walk -> {
+                            walk.when(eq(load(bs.get(14), v(j)), v(o)), found -> {
+                                for (int k = 0; k < Impulse.WORDS; k++) {
+                                    found.set(warmth[k], load(bs.get(17), add(mul(v(j), i(Impulse.WORDS)), i(k))));
+                                }
+                                found.set(walked, i(MOST_KEPT));
+                            });
+                            walk.set(j, load(bs.get(15), v(j)));
+                            walk.set(walked, add(v(walked), i(1)));
+                        });
+                        for (int k = 0; k < Impulse.WORDS; k++) {
+                            fits.store(bs.get(11), add(mul(v(slot), i(Impulse.WORDS)), i(k)),
+                                    v(warmth[k]));
+                        }
                     });
                 });
             }));
@@ -656,16 +921,17 @@ public final class Spheres {
 
     static final String[] ROUND_NAMES = {"x", "y", "z", "r", "im", "dx", "dy", "dz", "params", "u", "v", "w", "ax",
             "ay", "az", "tx", "ty", "tz", "contactA", "contactB", "contactDone", "contactCount", "checked", "claimed",
-            "cleared", "round", "open"};
-    static final List<Buffer> ROUND_BUFFERS = bind(ROUND_NAMES, 18);
+            "cleared", "round", "open", "contactImpulse"};
+    static final List<Buffer> ROUND_BUFFERS = bind(ROUND_NAMES, 18, "contactImpulse");
     /** Where in {@link #ROUND_NAMES} the claim arrays and the round's constants go, which differ by dispatch. */
     static final int ROUND_CHECKED = List.of(ROUND_NAMES).indexOf("checked");
 
     /**
      * Words of a {@code round}: whether it checks, whether it claims, the pass, the dispatch its claims are made
-     * with, the {@code open} word it marks, and the dispatch the claims it checks were made with.
+     * with, the {@code open} word it marks, the dispatch the claims it checks were made with, and whether it rubs:
+     * applies friction to the contacts it solves rather than parting them ({@link #contact}).
      */
-    public static final int ROUND_WORDS = 6;
+    public static final int ROUND_WORDS = 7;
 
     /**
      * One invocation per place in the list, {@code capacity} of them: one round of solving the contacts in sets no
@@ -743,7 +1009,8 @@ public final class Spheres {
                             held -> held.set(won, i(1)));
                 });
                 open.when(gt(v(won), i(0)), solving -> {
-                    contact(solving, a, o, motion, solving.let("omega", load(bs.get(8), i(OMEGA))));
+                    contact(solving, c, a, o, motion, solving.let("omega", load(bs.get(8), i(OMEGA))), pass,
+                            solving.let("rubs", load(round, i(6))), bs.get(27));
                     solving.store(done, v(c), v(pass));
                 });
                 open.when(eq(v(won), i(0)), waiting -> {
@@ -803,14 +1070,15 @@ public final class Spheres {
     }
 
     static final String[] WALLS_NAMES = {"x", "y", "z", "r", "im", "dx", "dy", "dz", "params", "u", "v", "w", "ax",
-            "ay", "az", "tx", "ty", "tz"};
+            "ay", "az", "tx", "ty", "tz", "wallImpulse"};
     static final List<Buffer> WALLS_BUFFERS = bind(WALLS_NAMES);
 
     /**
-     * One invocation per sphere, after a pass of {@link #contactRound}s: the sphere projected back inside the walls,
-     * as {@link #apply} does after the Jacobi move, and the push added to what the constraints have moved it. Each
-     * wall that pushed then holds the sphere by {@link #friction}, as a contact with no inverse mass, at the point
-     * of the sphere that touches it.
+     * One invocation per sphere, after a pass of {@link #contactRound}s: the sphere pushed out of each wall it is in,
+     * as {@link #apply} projects after the Jacobi move, and the push added to what the constraints have moved it. A
+     * wall's push is kept as the substep's whole, its warm start ({@link #warmWalls}) included, and never falls below
+     * zero, as a contact's normal impulse does not. Each wall the sphere is near then holds it by {@link #friction},
+     * as a contact with no inverse mass, at the point of the sphere that touches it.
      */
     public static Function walls() {
         List<Buffer> bs = WALLS_BUFFERS;
@@ -822,7 +1090,8 @@ public final class Spheres {
         Body b = new Body();
         LocalVar s = b.let("s", new Expr.InvocationId());
         b.when(lt(v(s), new Expr.InvocationCount()), t -> t.when(gt(load(bs.get(4), v(s)), f(0)), free ->
-                shift(free, s, new Expr[] {f(0), f(0), f(0)}, at, bs.get(3), displaced, bs.get(8), motion)));
+                shift(free, s, new Expr[] {f(0), f(0), f(0)}, at, bs.get(3), displaced, bs.get(8), motion,
+                        bs.get(18))));
         return function("spheresWalls", b);
     }
 
@@ -965,19 +1234,20 @@ public final class Spheres {
         LocalVar s = b.let("s", new Expr.InvocationId());
         b.when(lt(v(s), new Expr.InvocationCount()), t -> t.when(gt(load(im, v(s)), f(0)), free -> {
             Expr[] move = {load(correction[0], v(s)), load(correction[1], v(s)), load(correction[2], v(s))};
-            shift(free, s, move, at, radius, displaced, params, null);
+            shift(free, s, move, at, radius, displaced, params, null, null);
         }));
         return function("spheresApply", b);
     }
 
     /**
-     * Sphere {@code s} moved by {@code move}, then projected back inside the walls; and the move, as computed, added
-     * to what the constraints have moved it this substep, with the wall's push only where it pushed. With
-     * {@code friction}, each wall that pushed then holds the sphere ({@link #friction}); without, as Jacobi's
-     * {@link #apply} has it, none does.
+     * Sphere {@code s} moved by {@code move}, then out of the walls; and the move, as computed, added to what the
+     * constraints have moved it this substep, with the wall's push only where it pushed. Without {@code friction}, as
+     * Jacobi's {@link #apply} has it, the walls project the sphere back inside and nothing holds it along them. With
+     * it, as {@link #walls} has it, each wall's push is accumulated over the substep in {@code wallImpulses}, and each
+     * wall the sphere is near holds it ({@link #friction}).
      */
     private static void shift(Body free, LocalVar s, Expr[] move, Buffer[] at, Buffer radius, Buffer[] displaced,
-                              Buffer params, Motion friction) {
+                              Buffer params, Motion friction, Buffer wallImpulses) {
         int[] extent = {SX, SY, SZ};
         LocalVar r = free.let("r", load(radius, v(s)));
         Held held = Held.of(free, s, at, displaced, friction == null ? null : friction.turned);
@@ -985,25 +1255,49 @@ public final class Spheres {
             LocalVar c = free.let("c", move[a]);
             LocalVar moved = free.let("moved", add(v(held.at[a]), v(c)));
             LocalVar high = free.let("high", sub(load(params, i(extent[a])), v(r)));
-            LocalVar inside = free.let("inside", max(v(r), min(v(high), v(moved))));
-            free.set(held.at[a], v(inside));
-            // The move as computed, not as the rounded position has it; the wall's push only where it pushed.
-            LocalVar push = free.let("push", sub(v(inside), v(moved)));
-            free.set(held.displaced[a], add(v(held.displaced[a]), add(v(c), v(push))));
-            if (friction != null) {
+            if (friction == null) {
+                LocalVar inside = free.let("inside", max(v(r), min(v(high), v(moved))));
+                free.set(held.at[a], v(inside));
+                // The move as computed, not as the rounded position has it; the wall's push only where it pushed.
+                LocalVar push = free.let("push", sub(v(inside), v(moved)));
+                free.set(held.displaced[a], add(v(held.displaced[a]), add(v(c), v(push))));
+            } else {
                 int axis = a;
-                free.when(not(eq(v(push), f(0))), pushed -> {
-                    // The normal out of the wall the sphere was pushed from, and the push's size.
-                    LocalVar out = pushed.let("out", f(1));
-                    pushed.when(lt(v(push), f(0)), fromHigh -> fromHigh.set(out, f(-1)));
+                // The nearer wall along this axis, and how far the sphere is into it.
+                LocalVar side = free.let("side", f(1));
+                LocalVar into = free.let("into", sub(v(r), v(moved)));
+                free.when(gt(mul(v(moved), f(2)), load(params, i(extent[a]))), upper -> {
+                    upper.set(side, f(-1));
+                    upper.set(into, sub(v(moved), v(high)));
+                });
+                // What this wall has taken this substep, the warm start's included: the push out of it, projected as
+                // without friction; or, where it pushes nothing, a pull back toward it by no more than it has pushed,
+                // so its whole is never below zero, as a contact's is not.
+                LocalVar w = free.let("w", load(friction.im, v(s)));
+                Impulse taken = Impulse.of(free, wallImpulses,
+                        add(mul(v(s), i(WALL_IMPULSE_WORDS)), i(axis * Impulse.WORDS)));
+                LocalVar inside = free.let("inside", max(v(r), min(v(high), v(moved))));
+                LocalVar push = free.let("push", max(v(into), f(0)));
+                free.when(and(not(gt(v(into), f(0))), gt(v(taken.normal), f(0))), back -> {
+                    back.set(push, max(v(into), neg(mul(v(taken.normal), v(w)))));
+                    back.set(inside, add(v(moved), mul(v(side), v(push))));
+                });
+                free.set(taken.normal, add(v(taken.normal), div(v(push), v(w))));
+                free.set(held.at[a], v(inside));
+                free.set(held.displaced[a], add(v(held.displaced[a]), add(v(c), sub(v(inside), v(moved)))));
+                // It holds the sphere by friction while the sphere is as near it as the list takes a contact.
+                LocalVar reach = free.let("reach", mul(v(r), f(LIST_MARGIN)));
+                LocalVar out = free.let("out", f(0));
+                free.when(not(gt(v(inside), add(v(r), v(reach)))), low -> low.set(out, f(1)));
+                free.when(not(lt(v(inside), sub(v(high), v(reach)))), highWall -> highWall.set(out, f(-1)));
+                free.when(not(eq(v(out), f(0))), near -> {
                     LocalVar[] n = new LocalVar[3];
                     for (int k = 0; k < 3; k++) {
-                        n[k] = pushed.let("n", k == axis ? v(out) : f(0));
+                        n[k] = near.let("n", k == axis ? v(out) : f(0));
                     }
-                    LocalVar w = pushed.let("w", load(friction.im, v(s)));
-                    friction(pushed, friction, held, v(w), v(r), null, null, null, n,
-                            div(mul(v(push), v(out)), v(w)));
+                    friction(near, friction, held, v(w), v(r), null, null, null, n, taken);
                 });
+                taken.store(free);
             }
         }
         if (friction != null) {
@@ -1409,11 +1703,12 @@ public final class Spheres {
         return bind(names, names.length);
     }
 
-    /** The first {@code floats} names bound as f32, the rest as i32. */
-    private static List<Buffer> bind(String[] names, int floats) {
+    /** The first {@code floats} names bound as f32, the rest as i32 but for {@code alsoFloats}. */
+    private static List<Buffer> bind(String[] names, int floats, String... alsoFloats) {
+        List<String> others = List.of(alsoFloats);
         List<Buffer> buffers = new ArrayList<>();
         for (int k = 0; k < names.length; k++) {
-            buffers.add(new Buffer(names[k], k, k < floats ? F32 : I32));
+            buffers.add(new Buffer(names[k], k, k < floats || others.contains(names[k]) ? F32 : I32));
         }
         return List.copyOf(buffers);
     }
