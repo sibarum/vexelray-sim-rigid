@@ -391,10 +391,16 @@ contacts a step unsolved on the pile of 4096.
       frame, and paints the four octants where the product of its coordinates is positive paler: a beach ball. In the
       demo's *Heap of 343* at μ = 0.5 the spheres that rolled out lie at every angle; at none they all face alike.
       `SpinTest` checks that the buffer carries the orientation each step ended on, and the one before.
-- [ ] **Boxes**: orientation, a contact manifold, and stacking measured the way the column is. Planned, in seven
-      stages, in [boxes.md](boxes.md): a package of their own, contacts found once a step and kept through its
-      substeps as anchors in each body's frame, one invocation a pair's whole manifold, and a harmonic overhang among
-      the measures.
+- [x] **Boxes** (2026-10-19): orientation, a contact manifold, and stacking measured the way the column is. All seven
+      stages of [boxes.md](boxes.md) are built:
+      - a box keeps its angular momentum;
+      - the separating-axis narrow phase with a manifold of up to four points;
+      - Box2D v3's soft step at the level of velocities, after positional XPBD would not stack;
+      - a grid broad phase.
+
+      A column of ten, the harmonic overhang, a pyramid of 55 and piles of 343 and 1000 rest. Spheres join as a shape
+      of the same solver, with rolling resistance. Left: twenty in a column sway, and the rounds are still made on
+      the host, at one wait a step.
 - [ ] **Fixed point against f32**, as the fluid's scatter was measured. The velocity finding above is a reason to
       look: f32 positions already cost something here.
 - [ ] **The budgeted clock** (`dev.vexelray.sim.core.time.Clock`) driving the step, as it drives the shallow-water
