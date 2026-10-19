@@ -80,8 +80,8 @@ public final class Boxes {
     /** The workgroup every pass must be registered with, as for spheres. */
     public static final int WORKGROUP = CountingSort.BLOCK;
 
-    /** {@code [h, gx, gy, gz, sx, sy, sz, muStatic, muKinetic, passes]}, see {@link #params}. */
-    public static final int PARAM_COUNT = 10;
+    /** {@code [h, gx, gy, gz, sx, sy, sz, muStatic, muKinetic, passes, margin]}, see {@link #params}. */
+    public static final int PARAM_COUNT = 11;
 
     static final int H = 0;
     static final int GX = 1;
@@ -93,6 +93,7 @@ public final class Boxes {
     static final int MU_STATIC = 7;
     static final int MU_KINETIC = 8;
     static final int PASSES = 9;
+    static final int MARGIN = 10;
 
     /** The sweeps over its corners a box's {@link #walls} pass makes, unless told otherwise. */
     public static final int WALL_PASSES = 4;
@@ -132,6 +133,20 @@ public final class Boxes {
      */
     public static int[] params(double h, double gx, double gy, double gz, double sx, double sy, double sz,
                                double muStatic, double muKinetic, int passes) {
+        return params(h, gx, gy, gz, sx, sy, sz, muStatic, muKinetic, passes, 0);
+    }
+
+    /**
+     * As above, with the contact margin.
+     *
+     * @param margin how far apart two boxes may be and still have their contact found ({@link BoxContact#collide}),
+     *               in metres; 0, the default, for only boxes that touch or overlap
+     */
+    public static int[] params(double h, double gx, double gy, double gz, double sx, double sy, double sz,
+                               double muStatic, double muKinetic, int passes, double margin) {
+        if (!(margin >= 0) || Double.isInfinite(margin)) {
+            throw new IllegalArgumentException("a margin is finite and at least 0, got " + margin);
+        }
         if (!(h > 0) || !(sx > 0) || !(sy > 0) || !(sz > 0)) {
             throw new IllegalArgumentException("h > 0 and a box of positive size, got h " + h + ", box " + sx + " × "
                     + sy + " × " + sz);
@@ -142,7 +157,7 @@ public final class Boxes {
                     + ", " + muKinetic + " and " + passes);
         }
         return new int[] {bits(h), bits(gx), bits(gy), bits(gz), bits(sx), bits(sy), bits(sz), bits(muStatic),
-                bits(muKinetic), bits(passes)};
+                bits(muKinetic), bits(passes), bits(margin)};
     }
 
     /**

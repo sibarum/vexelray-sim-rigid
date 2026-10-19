@@ -1,6 +1,6 @@
 # Boxes: a contact manifold, and stacking measured
 
-Planned on 2026-10-19. Stages 1 to 3 are built; the rest is not yet. The plan follows the sphere work: each stage is
+Planned on 2026-10-19. Stages 1 to 4 are built; the rest is not yet. The plan follows the sphere work: each stage is
 built far enough to be measured against a known answer, and records what it found under its own heading. Where a
 measurement changes the plan, the stage says how.
 
@@ -184,18 +184,59 @@ Boxes take only the substeps and friction controls; a box scenario rebuilt for n
 carrying its state. Squashing is for spheres only. Seen with `ottermate` on this GPU: the spinning box turns over
 between 1 s and 3.5 s, and the dropped boxes rest flat, each edge drawn.
 
-### 4. Box against box: the narrow phase
+### 4. Box against box: the narrow phase — built, measured (2026-10-19)
 
-A separating-axis test over the 15 axes: three face normals from each box and the nine edge cross products. The axis
-of least overlap is kept, with a bias toward face axes so that a face resting on a face does not flicker to an edge.
+`BoxContact.collide`: one invocation per pair, from a list of pairs, writing the pair's manifold. The manifold is
+`BoxContact.MANIFOLD_WORDS` (40) floats: the normal from the first box to the second, the count, the axis that won,
+and up to four points. Each point is an anchor on each box in that box's own frame, and a depth. A margin
+(`Boxes.params`' `margin`) also finds pairs about to touch, at negative depth, for stage 5.
 
-- For a face axis, the incident face is clipped against the reference face's side planes (Sutherland–Hodgman), and the
-  result is reduced to at most four points, keeping the deepest point and the widest spread.
-- For an edge axis, one point at the closest points of the two edges.
+- **Separating axes.** The 15 axes, each giving how far it parts the pair. The axis that parts them most wins, with
+  Box2D's bias. The second box's face beats the first's only if its separation is more than 0.98 of it plus 1% of the
+  smallest half-extent, and an edge axis beats the best face only by the same.
+- **A face: the vertices of the overlap, not Sutherland–Hodgman.** Clipping a polygon needs arrays of changing
+  length, which IR has no locals for. Instead, the clipped polygon's vertices are found directly. They are of three
+  kinds:
+  - the incident face's corners inside the reference face;
+  - the reference face's corners inside the incident face, seen along the normal;
+  - the 16 crossings of their edges.
 
-The narrow phase is tested on its own, on the CPU and the GPU, against cases worked out on the host: face on face,
-offset and turned; edge across edge; a corner into a face; and boxes that touch on one axis and are parted on
-another.
+  Those no shallower than minus the margin go into a scratch buffer, `candidates`, at most 24 a pair.
+- **Reducing to four.** The deepest point, the farthest from it, and the largest triangle on each side, as Bullet and
+  Box2D reduce. Fixed directions would need no scratch, but a symmetric overlap ties them and can drop a corner.
+- **An edge.** The closest points of the two edges each box puts furthest toward the other.
+
+Two thresholds were needed. Points within 1e-5 of a face's edge, as a share, count as inside it: two faces the same
+size, one on the other, meet exactly at their edges, and without the slack a column of cubes would have found no
+points. And a third point must stand off the line through the first two by 1e-4 of its length (see below).
+
+`BoxContactTest`, both backends, each case worked out by hand, every point checked on both boxes in the world's frame:
+
+| Case | Known answer |
+| --- | --- |
+| Cubes 5 cm apart | no contact |
+| A cube 1 cm into a slab | its four bottom corners, 1 cm deep, normal up, the slab's face |
+| A cube 1 cm into a cube the same size | the same four corners, though every corner is on the other face's edge |
+| A cube turned 45° on the slab | its diamond of corners |
+| A cube over the slab's edge | clipped there: two corners and two crossings |
+| A turned cube centred over the edge | a triangle: three points |
+| The cube and slab as (cube, slab) | the cube's face the reference, normal down, the same points seen on the slab |
+| Two cubes, an edge along z under one along x | one point, where they cross, edge axis 12 |
+| A cube corner-down into the slab | one point, the corner |
+| Shadows overlapping on the first's axes, parted on the second's | no contact |
+| A cube 5 mm above the slab | nothing with no margin; with 1 cm, four corners at −5 mm |
+
+And 500 random pairs (468 touching, 1,196 points) checked property by property: every anchor on its own box's
+surface to 1e-5 m, every depth the anchors' gap along the normal to 1e-5 m, no point twice, and a point wherever the
+spheres inside the two boxes overlap.
+
+**A finding on the way: a corner found twice.** A corner of the overlap can be found as more than one kind of vertex,
+as an incident corner and as a crossing at its end, and the copies differ by rounding. With an absolute least area
+for the third and fourth points, the GPU kept a copy of one of a triangle's corners as a fourth point, 1e-7 m from
+the first. The least area is now relative, 1e-4 of the first two points' distance squared.
+
+What stage 5 will need that is not here: the pairs come from a list the test makes, not a broad phase; and the
+normal is the world's at detection, so a pair that turns within a step keeps it. The risks section has that.
 
 ### 5. Box against box: the solve, and stacking measured
 
