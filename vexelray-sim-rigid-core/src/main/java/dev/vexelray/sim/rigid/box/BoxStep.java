@@ -4,7 +4,9 @@ import dev.supirvast.vastir.build.Body;
 import dev.supirvast.vastir.core.Function;
 import dev.supirvast.vastir.pass.BufferSpec;
 import dev.supirvast.vastir.pass.Buffered;
+import dev.supirvast.vastir.pass.CountingSort;
 import dev.supirvast.vastir.pass.Pass;
+import dev.vexelray.sim.rigid.sphere.SphereGrid;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -16,17 +18,26 @@ import java.util.Map;
  * A whole {@link Boxes} step as data, as {@code SphereStep} is for spheres: which kernel, over which named buffers,
  * with how many invocations, in order. Nothing here runs anything; {@link BoxStepper} runs it.
  *
- * <p>A step begins with {@link #collide}: every pair's manifold and impulses set aside ({@link BoxPairs#keep}), every
- * pair of boxes tested ({@link BoxContact#collide}), and each new point given the impulses of the point it was
- * ({@link BoxPairs#carry}). Every pair of the boxes is in the list, {@code n (n − 1) / 2} of them: the broad phase is
- * stage 6. Then {@link #step(int)}, for as many rounds as the stepper sorted the touching pairs into: each substep the
- * soft step — {@link Boxes#velocities}, the warm start, {@link #sweeps} sweeps of the solve, {@link Boxes#positions},
- * and as many of the relax — each sweep every round of pairs ({@link BoxPairs#solve}) and then the walls
+ * <p>A step begins with {@link #collide}:
+ *
+ * <ol>
+ *   <li>every slot's pair, manifold and impulses set aside ({@link BoxPairs#keep});</li>
+ *   <li>the boxes sorted into the grid by their centres ({@link BoxBroad#bin} and SupirVast's counting sort), and each
+ *       box's partners listed into its slots ({@link BoxBroad#list});</li>
+ *   <li>every listed pair tested ({@link BoxContact#collide});</li>
+ *   <li>each new point given the impulses of the point it was ({@link BoxPairs#carry});</li>
+ *   <li>what the host needs to make the rounds written to {@code contacts} ({@link BoxBroad#counts}).</li>
+ * </ol>
+ *
+ * Then {@link #step(int)}, for as many rounds as the stepper sorted the touching pairs into: each substep the soft
+ * step — {@link Boxes#velocities}, the warm start, {@link #sweeps} sweeps of the solve, {@link Boxes#positions}, and
+ * as many of the relax — each sweep every round of pairs ({@link BoxPairs#solve}) and then the walls
  * ({@link Boxes#walls}). Once at the end, {@link Boxes#show}.
  *
  * <p>{@code lambda} and {@code rub} hold each corner's normal and tangential impulse against each wall, and
- * {@code impulses} each pair's points'. {@code round0} to {@code round31} hold the rounds, {@link #width} places each,
- * −1 where a place is empty. The parameters' {@code h} is the substep, so a step advances {@code substeps · h} seconds.
+ * {@code impulses} each slot's points'. {@code rounds} holds the rounds, {@link #width} places each, −1 where a place
+ * is empty, written once a step; {@code which0} to {@code which31}, each one word, written once, hold where each round
+ * begins. The parameters' {@code h} is the substep, so a step advances {@code substeps · h} seconds.
  */
 public final class BoxStep implements Buffered {
 
@@ -39,8 +50,10 @@ public final class BoxStep implements Buffered {
     public final int sweeps;
     /** Whether every other sweep runs backwards: the walls first, the rounds last to first, the points reversed. */
     public final boolean symmetric;
-    /** Pairs in the list: every pair of boxes. */
-    public final int pairs;
+    /** The broad phase's grid; null for a lone box, which has no pairs. */
+    public final SphereGrid grid;
+    /** Slots in the pair list: {@link BoxBroad#SLOTS} for each box, or none for a lone box. */
+    public final int slots;
     /** Places in a round: no more pairs than this can share no box. */
     public final int width;
 
@@ -56,17 +69,16 @@ public final class BoxStep implements Buffered {
     private final Map<String, Pass> walls = new HashMap<>();
     private final Map<String, Function> solve = new HashMap<>();
 
-    /** {@code substeps} substeps of {@link Boxes#WALL_PASSES} sweeps. */
+    /** A lone box, or boxes that never meet each other: {@code substeps} substeps of {@link Boxes#WALL_PASSES}. */
     public BoxStep(int boxes, int substeps) {
-        this(boxes, substeps, Boxes.WALL_PASSES);
+        this(boxes, substeps, Boxes.WALL_PASSES, false, null);
     }
 
-    /** {@code substeps} substeps of {@code sweeps} sweeps, every one forwards. */
-    public BoxStep(int boxes, int substeps, int sweeps) {
-        this(boxes, substeps, sweeps, false);
-    }
-
-    public BoxStep(int boxes, int substeps, int sweeps, boolean symmetric) {
+    /**
+     * {@code substeps} substeps of {@code sweeps} sweeps each of the solve and the relax, over {@code grid}
+     * ({@link BoxBroad#grid}), which more than one box needs.
+     */
+    public BoxStep(int boxes, int substeps, int sweeps, boolean symmetric, SphereGrid grid) {
         if (boxes < 1 || substeps < 1 || sweeps < 1) {
             throw new IllegalArgumentException("a step needs boxes, substeps and sweeps, got " + boxes + ", "
                     + substeps + " and " + sweeps);
@@ -75,7 +87,8 @@ public final class BoxStep implements Buffered {
         this.substeps = substeps;
         this.sweeps = sweeps;
         this.symmetric = symmetric;
-        this.pairs = boxes * (boxes - 1) / 2;
+        this.grid = boxes > 1 ? grid : null;
+        this.slots = boxes > 1 && grid != null ? Math.multiplyExact(boxes, BoxBroad.SLOTS) : 0;
         this.width = Math.max(1, boxes / 2);
         for (String field : Boxes.BOX) {
             buffers.put(field, new BufferSpec(field, Body.F32, boxes));
@@ -100,29 +113,43 @@ public final class BoxStep implements Buffered {
             }
         }
 
-        if (pairs > 0) {
-            buffers.put("pairs", new BufferSpec("pairs", Body.I32, 2 * pairs));
-            buffers.put("manifold", new BufferSpec("manifold", Body.F32, BoxContact.MANIFOLD_WORDS * pairs));
-            buffers.put("candidates", new BufferSpec("candidates", Body.F32, BoxContact.SCRATCH_WORDS * pairs));
-            buffers.put("impulses", new BufferSpec("impulses", Body.F32, BoxPairs.IMPULSE_WORDS * pairs));
-            buffers.put("manifoldWas", new BufferSpec("manifoldWas", Body.F32, BoxContact.MANIFOLD_WORDS * pairs));
-            buffers.put("impulsesWas", new BufferSpec("impulsesWas", Body.F32, BoxPairs.IMPULSE_WORDS * pairs));
+        if (slots > 0) {
+            int length = CountingSort.length(grid.cells());
+            for (String name : List.of("keys", "ranks", "order")) {
+                buffers.put(name, new BufferSpec(name, Body.I32, boxes));
+            }
+            buffers.put("counts", new BufferSpec("counts", Body.I32, length));
+            buffers.put("starts", new BufferSpec("starts", Body.I32, length));
+            buffers.put("sums", new BufferSpec("sums", Body.I32, CountingSort.blocks(length)));
+            buffers.put("pairs", new BufferSpec("pairs", Body.I32, 2 * slots));
+            buffers.put("pairsWas", new BufferSpec("pairsWas", Body.I32, 2 * slots));
+            buffers.put("manifold", new BufferSpec("manifold", Body.F32, BoxContact.MANIFOLD_WORDS * slots));
+            buffers.put("manifoldWas", new BufferSpec("manifoldWas", Body.F32, BoxContact.MANIFOLD_WORDS * slots));
+            buffers.put("candidates", new BufferSpec("candidates", Body.F32, BoxContact.SCRATCH_WORDS * slots));
+            buffers.put("impulses", new BufferSpec("impulses", Body.F32, BoxPairs.IMPULSE_WORDS * slots));
+            buffers.put("impulsesWas", new BufferSpec("impulsesWas", Body.F32, BoxPairs.IMPULSE_WORDS * slots));
+            buffers.put("contacts", new BufferSpec("contacts", Body.I32, 2 * slots + boxes));
+            buffers.put("rounds", new BufferSpec("rounds", Body.I32, MOST_ROUNDS * width));
             for (int r = 0; r < MOST_ROUNDS; r++) {
-                buffers.put(round(r), new BufferSpec(round(r), Body.I32, width));
+                buffers.put(which(r), new BufferSpec(which(r), Body.I32, 1));
+                constants.put(which(r), new int[] {r * width});
             }
-            int[] list = new int[2 * pairs];
-            for (int a = 0, p = 0; a < boxes; a++) {
-                for (int b = a + 1; b < boxes; b++, p++) {
-                    list[2 * p] = a;
-                    list[2 * p + 1] = b;
-                }
-            }
-            constants.put("pairs", list);
-            collide = List.of(
-                    new Pass("keep", BoxPairs.keep(), BoxPairs.CARRY_BUFFERS, List.of(BoxPairs.CARRY_NAMES), pairs),
-                    new Pass("collide", BoxContact.collide(), BoxContact.BUFFERS, List.of(BoxContact.NAMES), pairs),
-                    new Pass("carry", BoxPairs.carry(), BoxPairs.CARRY_BUFFERS, List.of(BoxPairs.CARRY_NAMES),
-                            pairs));
+            List<Pass> passes = new ArrayList<>();
+            passes.add(new Pass("keep", BoxPairs.keep(), BoxPairs.CARRY_BUFFERS, List.of(BoxPairs.CARRY_NAMES),
+                    slots));
+            passes.add(new Pass("bin", BoxBroad.bin(grid), BoxBroad.BIN_BUFFERS, List.of(BoxBroad.BIN_NAMES), boxes));
+            passes.addAll(CountingSort.scan(length, "counts", "starts", "sums"));
+            passes.add(new Pass("order", CountingSort.order(), CountingSort.ORDER_BUFFERS,
+                    List.of("keys", "ranks", "starts", "order"), boxes));
+            passes.add(new Pass("list", BoxBroad.list(grid, slots), BoxBroad.LIST_BUFFERS,
+                    List.of(BoxBroad.LIST_NAMES), boxes));
+            passes.add(new Pass("collide", BoxContact.collide(), BoxContact.BUFFERS, List.of(BoxContact.NAMES),
+                    slots));
+            passes.add(new Pass("carry", BoxPairs.carry(), BoxPairs.CARRY_BUFFERS, List.of(BoxPairs.CARRY_NAMES),
+                    slots));
+            passes.add(new Pass("counts", BoxBroad.counts(slots), BoxBroad.COUNTS_BUFFERS,
+                    List.of(BoxBroad.COUNTS_NAMES), slots));
+            collide = List.copyOf(passes);
             for (Boxes.Sweep kind : Boxes.Sweep.values()) {
                 for (boolean reverse : new boolean[] {false, true}) {
                     solve.put(key(kind, reverse), BoxPairs.solve(kind, reverse));
@@ -137,9 +164,9 @@ public final class BoxStep implements Buffered {
         return kind + (reverse ? " back" : "");
     }
 
-    /** The name of round {@code r}'s buffer. */
-    public static String round(int r) {
-        return "round" + r;
+    /** The name of the one-word buffer that holds where round {@code r} begins in {@code rounds}. */
+    public static String which(int r) {
+        return "which" + r;
     }
 
     @Override
@@ -149,21 +176,21 @@ public final class BoxStep implements Buffered {
 
     /**
      * What to write into which buffers once, after they are cleared and before the first step: every orientation as
-     * the identity, which a host that wants others writes after, and the list of pairs.
+     * the identity, which a host that wants others writes after, and where each round begins.
      */
     public Map<String, int[]> constants() {
         return constants;
     }
 
-    /** The passes that begin a step, over every pair; none for a lone box. */
+    /** The passes that begin a step: the broad phase and the collide; none where no box can meet another. */
     public List<Pass> collide() {
         return collide;
     }
 
     /** A step's substeps, with the touching pairs in {@code rounds} rounds; one list for each count, kept. */
     public List<Pass> step(int rounds) {
-        if (rounds < 0 || rounds > MOST_ROUNDS || (pairs == 0 && rounds > 0)) {
-            throw new IllegalArgumentException("0 to " + (pairs == 0 ? 0 : MOST_ROUNDS) + " rounds, got " + rounds);
+        if (rounds < 0 || rounds > MOST_ROUNDS || (slots == 0 && rounds > 0)) {
+            throw new IllegalArgumentException("0 to " + (slots == 0 ? 0 : MOST_ROUNDS) + " rounds, got " + rounds);
         }
         return steps.computeIfAbsent(rounds, this::build);
     }
@@ -194,7 +221,7 @@ public final class BoxStep implements Buffered {
         for (int order = 0; order < rounds; order++) {
             int r = reverse ? rounds - 1 - order : order;
             List<String> names = new ArrayList<>(List.of(BoxPairs.NAMES));
-            names.set(names.indexOf("round"), round(r));
+            names.set(names.indexOf("which"), which(r));
             passes.add(new Pass(kind + " " + r, solve.get(key), BoxPairs.BUFFERS, names, width));
         }
         if (!reverse) {

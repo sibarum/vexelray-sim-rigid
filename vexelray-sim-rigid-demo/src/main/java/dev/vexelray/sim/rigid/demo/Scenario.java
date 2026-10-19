@@ -124,6 +124,30 @@ enum Scenario {
             }
             return s;
         }
+    },
+
+    BOX_PILE("Pile of 343 boxes", "Cubes of 8 cm, a loose block seven a side, each turned a little, dropped. The grid"
+            + " finds the pairs near enough to touch, and the touching ones are solved in rounds that share no cube."
+            + " Boxes take only the substeps and friction controls.") {
+        @Override
+        State start() {
+            int side = 7;
+            State s = State.boxes(side * side * side, 0.1 * side + 0.4, 0.1 * side + 1.5, 0.1 * side + 0.4, -9.81);
+            Random random = new Random(7);
+            int k = 0;
+            for (int i = 0; i < side; i++) {
+                for (int j = 0; j < side; j++) {
+                    for (int l = 0; l < side; l++, k++) {
+                        double[] axis = {random.nextDouble() - 0.5, random.nextDouble() - 0.5,
+                                random.nextDouble() - 0.5};
+                        s.box(k, 0.25 + 0.1 * i + 0.02 * random.nextDouble(), 0.3 + 0.1 * j,
+                                0.25 + 0.1 * l + 0.02 * random.nextDouble(), 0.04, 0.04, 0.04, 0.5,
+                                axisAngle(axis, 0.6 * random.nextDouble()), new double[3]);
+                    }
+                }
+            }
+            return s;
+        }
     };
 
     private static final double[] IDENTITY = {0, 0, 0, 1};
@@ -140,7 +164,7 @@ enum Scenario {
 
     /** Whether its bodies are boxes, which take only the substeps and friction controls. */
     boolean boxes() {
-        return this == SPINNING_BOX || this == DROPPED_BOXES || this == PYRAMID;
+        return this == SPINNING_BOX || this == DROPPED_BOXES || this == PYRAMID || this == BOX_PILE;
     }
 
     /** A cube of {@code side³} spheres, loosely spaced and jittered, above the floor of a square box. */

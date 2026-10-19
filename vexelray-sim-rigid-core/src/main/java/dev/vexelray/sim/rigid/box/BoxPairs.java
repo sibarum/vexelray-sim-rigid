@@ -13,6 +13,8 @@ import java.util.List;
 import static dev.supirvast.vastir.build.Body.F32;
 import static dev.supirvast.vastir.build.Body.I32;
 import static dev.supirvast.vastir.build.Body.add;
+import static dev.supirvast.vastir.build.Body.and;
+import static dev.supirvast.vastir.build.Body.div;
 import static dev.supirvast.vastir.build.Body.eq;
 import static dev.supirvast.vastir.build.Body.f;
 import static dev.supirvast.vastir.build.Body.gt;
@@ -45,14 +47,15 @@ public final class BoxPairs {
     public static final int IMPULSE_WORDS = BoxContact.MOST_POINTS * 4;
 
     public static final String[] NAMES = {"x", "y", "z", "qx", "qy", "qz", "qw", "im", "hx", "hy", "hz", "u", "v", "w",
-            "lx", "ly", "lz", "params", "pairs", "manifold", "impulses", "round"};
+            "lx", "ly", "lz", "params", "pairs", "manifold", "impulses", "rounds", "which"};
     public static final List<Buffer> BUFFERS = bindAll(NAMES);
 
     private BoxPairs() {
     }
 
     /**
-     * One invocation per place in a round: the pair at that place in {@code round}, or none where it holds −1, and
+     * One invocation per place in a round: the pair at that place in the round, which begins at {@code rounds[which]},
+     * or none where it holds −1, and
      * one {@code sweep} over its manifold's points; with {@code reverse}, last to first.
      */
     public static Function solve(Boxes.Sweep sweep, boolean reverse) {
@@ -67,12 +70,13 @@ public final class BoxPairs {
         Buffer pairs = bs.get(18);
         Buffer manifold = bs.get(19);
         Buffer impulses = bs.get(20);
-        Buffer round = bs.get(21);
+        Buffer rounds = bs.get(21);
+        Buffer which = bs.get(22);
 
         Body b = new Body();
         LocalVar k = b.let("k", new Expr.InvocationId());
         b.when(lt(v(k), new Expr.InvocationCount()), t -> {
-            LocalVar pair = t.let("pair", load(round, v(k)));
+            LocalVar pair = t.let("pair", load(rounds, add(load(which, i(0)), v(k))));
             t.when(not(lt(v(pair), i(0))), solving -> {
                 LocalVar out = solving.let("out", mul(v(pair), i(BoxContact.MANIFOLD_WORDS)));
                 LocalVar count = solving.let("count", toInt(load(manifold, add(v(out), i(BoxContact.COUNT)))));
@@ -119,15 +123,15 @@ public final class BoxPairs {
     }
 
     public static final String[] CARRY_NAMES = {"pairs", "hx", "hy", "hz", "manifold", "impulses", "manifoldWas",
-            "impulsesWas"};
+            "impulsesWas", "pairsWas"};
     public static final List<Buffer> CARRY_BUFFERS = bindAll(CARRY_NAMES);
 
     /** How near a point must be to one of the step before, as a share of the first box's smallest half-extent. */
     public static final float SAME_POINT = 0.05f;
 
     /**
-     * One invocation per pair, before the step's collide: its manifold and impulses copied aside, for
-     * {@link #carry} to find them after the collide has written new ones.
+     * One invocation per slot, before the step's list and collide: its pair, manifold and impulses copied aside, for
+     * {@link #carry} to find them after new ones are written.
      */
     public static Function keep() {
         List<Buffer> bs = CARRY_BUFFERS;
@@ -142,13 +146,17 @@ public final class BoxPairs {
             for (int w = 0; w < IMPULSE_WORDS; w++) {
                 t.store(bs.get(7), add(v(held), i(w)), load(bs.get(5), add(v(held), i(w))));
             }
+            for (int w = 0; w < 2; w++) {
+                t.store(bs.get(8), add(mul(v(p), i(2)), i(w)), load(bs.get(0), add(mul(v(p), i(2)), i(w))));
+            }
         });
         return new Function("boxPairsKeep", new Type.FunctionType(Type.VOID, List.of()), b.finish());
     }
 
     /**
-     * One invocation per pair, after the step's collide: each new point takes the impulses of the point of the step
-     * before whose anchor on the first box is nearest it, if one is within {@link #SAME_POINT} of that box's smallest
+     * One invocation per slot, after the step's collide: the pair's slot the step before found among its first box's
+     * slots by its partner ({@link BoxBroad}), and each new point given the impulses of the point of the step before
+     * whose anchor on the first box is nearest it, if one is within {@link #SAME_POINT} of that box's smallest
      * half-extent; else it starts from nothing. A box at rest finds the same points step after step, so its load is
      * carried on, rather than lost every step and taken up again.
      */
@@ -164,7 +172,21 @@ public final class BoxPairs {
             LocalVar out = t.let("out", mul(v(p), i(BoxContact.MANIFOLD_WORDS)));
             LocalVar held = t.let("held", mul(v(p), i(IMPULSE_WORDS)));
             LocalVar count = t.let("count", toInt(load(manifold, add(v(out), i(BoxContact.COUNT)))));
-            LocalVar before = t.let("before", toInt(load(was, add(v(out), i(BoxContact.COUNT)))));
+            LocalVar partner = t.let("partner", load(bs.get(0), add(mul(v(p), i(2)), i(1))));
+            LocalVar first = t.let("first", mul(div(v(p), i(BoxBroad.SLOTS)), i(BoxBroad.SLOTS)));
+            LocalVar wasSlot = t.let("wasSlot", i(-1));
+            LocalVar look = t.let("look", i(0));
+            t.loop(lt(v(look), i(BoxBroad.SLOTS)), search -> {
+                LocalVar then = search.let("then", load(bs.get(8), add(mul(add(v(first), v(look)), i(2)), i(1))));
+                search.when(and(eq(v(then), v(partner)), not(lt(v(partner), i(0)))), same ->
+                        same.set(wasSlot, add(v(first), v(look))));
+                search.set(look, add(v(look), i(1)));
+            });
+            LocalVar outWas = t.let("outWas", mul(v(wasSlot), i(BoxContact.MANIFOLD_WORDS)));
+            LocalVar heldWas = t.let("heldWas", mul(v(wasSlot), i(IMPULSE_WORDS)));
+            LocalVar before = t.let("before", i(0));
+            t.when(not(lt(v(wasSlot), i(0))), found -> found.set(before,
+                    toInt(load(was, add(v(outWas), i(BoxContact.COUNT))))));
             LocalVar ia = t.let("ia", load(bs.get(0), mul(v(p), i(2))));
             LocalVar smallest = t.let("smallest", Body.min(load(bs.get(1), v(ia)), Body.min(load(bs.get(2), v(ia)),
                     load(bs.get(3), v(ia)))));
@@ -182,7 +204,7 @@ public final class BoxPairs {
                     for (int old = 0; old < BoxContact.MOST_POINTS; old++) {
                         int oldSlot = old;
                         present.when(lt(i(oldSlot), v(before)), earlier -> {
-                            LocalVar[] then = load3(earlier, was, earlier.let("whereWas", add(v(out),
+                            LocalVar[] then = load3(earlier, was, earlier.let("whereWas", add(v(outWas),
                                     i(BoxContact.POINTS + oldSlot * BoxContact.POINT_WORDS))), BoxContact.ANCHOR_FIRST);
                             LocalVar[] gap = new LocalVar[3];
                             for (int a = 0; a < 3; a++) {
@@ -192,7 +214,7 @@ public final class BoxPairs {
                             earlier.when(lt(v(d2), v(nearest)), nearer -> {
                                 nearer.set(nearest, v(d2));
                                 for (int w = 0; w < 4; w++) {
-                                    nearer.set(taken[w], load(impulsesWas, add(v(held), i(4 * oldSlot + w))));
+                                    nearer.set(taken[w], load(impulsesWas, add(v(heldWas), i(4 * oldSlot + w))));
                                 }
                             });
                         });
@@ -219,7 +241,7 @@ public final class BoxPairs {
     private static List<Buffer> bindAll(String[] names) {
         List<Buffer> buffers = new ArrayList<>();
         for (int k = 0; k < names.length; k++) {
-            boolean ints = names[k].equals("pairs") || names[k].equals("round");
+            boolean ints = List.of("pairs", "pairsWas", "rounds", "which").contains(names[k]);
             buffers.add(new Buffer(names[k], k, ints ? I32 : F32));
         }
         return List.copyOf(buffers);

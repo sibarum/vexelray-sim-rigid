@@ -141,8 +141,9 @@ class BoxStackTest {
             }
             float[] x0 = scene.x.clone();
             float[] y0 = scene.y.clone();
+            scene.start(backend);
             long start = System.nanoTime();
-            scene.start(backend).advanceSeconds(3);
+            scene.advanceSeconds(3);
             double ms = (System.nanoTime() - start) / 1e6 / 180;
             BoxDiagnostics state = scene.diagnostics();
             double moved = 0;
@@ -157,6 +158,79 @@ class BoxStackTest {
         }
     }
 
+    /**
+     * A pile of 343 cubes of 8 cm, half a kilogram each: a loose block 7 a side, jittered and turned by up to 0.6 rad,
+     * dropped into a walled box, friction 0.5, through the grid. After 4 s it rests, under 1e-6 J, no point of any
+     * manifold deeper than 1 mm, no pair left unsolved and no box short of slots. Measured on the GPU: 1.6e-8 J,
+     * 0.47 mm, 11 rounds, 6.9 ms a step.
+     */
+    @Test
+    void aPileOf343Rests() {
+        pile(Backend.GPU, 7, 1e-6, 1e-3);
+    }
+
+    @Test
+    @Tag("physics")
+    void aPileOf343RestsOnTheCpu() {
+        pile(Backend.CPU, 7, 1e-6, 1e-3);
+    }
+
+    /** The same, 1000 cubes, 10 a side: under 1e-5 J and 2 mm. Measured: 1.0e-6 J, 0.9 mm, 14 rounds, 7.9 ms. */
+    @Test
+    void aPileOf1000Rests() {
+        pile(Backend.GPU, 10, 1e-5, 2e-3);
+    }
+
+    private static void pile(Backend backend, int side, double mostEnergy, double mostDepth) {
+        int n = side * side * side;
+        try (BoxScene scene = new BoxScene(n).uniform(0.04, 0.04, 0.04, 0.5)) {
+            scene.muStatic = scene.muKinetic = 0.5;
+            scene.sx = scene.sz = 0.1 * side + 0.4;
+            scene.sy = 0.1 * side + 1.5;
+            java.util.Random random = new java.util.Random(7);
+            int k = 0;
+            for (int i = 0; i < side; i++) {
+                for (int j = 0; j < side; j++) {
+                    for (int l = 0; l < side; l++, k++) {
+                        scene.x[k] = (float) (0.25 + 0.1 * i + 0.02 * random.nextDouble());
+                        scene.y[k] = (float) (0.3 + 0.1 * j);
+                        scene.z[k] = (float) (0.25 + 0.1 * l + 0.02 * random.nextDouble());
+                        double[] axis = {random.nextDouble() - 0.5, random.nextDouble() - 0.5,
+                                random.nextDouble() - 0.5};
+                        double length = Math.sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+                        double angle = 0.6 * random.nextDouble();
+                        double sin = Math.sin(angle / 2) / length;
+                        for (int a = 0; a < 3; a++) {
+                            scene.q[a][k] = (float) (axis[a] * sin);
+                        }
+                        scene.q[3][k] = (float) Math.cos(angle / 2);
+                    }
+                }
+            }
+            scene.start(backend).advanceSeconds(3);
+            long start = System.nanoTime();
+            scene.advanceSeconds(1);
+            double ms = (System.nanoTime() - start) / 1e6 / 60;
+            BoxDiagnostics state = scene.diagnostics();
+            float[] manifold = scene.floats("manifold");
+            double deepest = 0;
+            for (int p = 0; p < scene.slots(); p++) {
+                int at = p * BoxContact.MANIFOLD_WORDS;
+                for (int c = 0; c < (int) manifold[at + BoxContact.COUNT]; c++) {
+                    deepest = Math.max(deepest, manifold[at + BoxContact.POINTS + c * BoxContact.POINT_WORDS
+                            + BoxContact.DEPTH]);
+                }
+            }
+            System.out.printf("pile of %d, %s: energy %.2e J, deepest %.2f mm, %d touching, %d points, rounds %d,"
+                    + " %.2f ms a step%n", n, backend, state.kinetic(), 1000 * deepest, scene.last.touching(),
+                    scene.last.points(), scene.mostRounds, ms);
+            assertTrue(state.kinetic() < mostEnergy, "still moving: " + state.kinetic() + " J");
+            assertTrue(deepest < mostDepth, "a point " + deepest + " m deep");
+            assertEquals(0, scene.unplaced, "pairs left unsolved");
+            assertEquals(0, scene.unlisted, "partners with no slot");
+        }
+    }
+
     private static void column(Backend backend, int n, double mostDrift, double mostEnergy) {
         try (BoxScene scene = new BoxScene(n).uniform(0.05, 0.05, 0.05, 1)) {
             scene.sx = scene.sz = 1;
@@ -166,8 +240,9 @@ class BoxStackTest {
                 scene.y[k] = (float) (0.05 + 0.101 * k);
             }
             scene.muStatic = scene.muKinetic = 0.5;
+            scene.start(backend);
             long start = System.nanoTime();
-            scene.start(backend).advanceSeconds(3);
+            scene.advanceSeconds(3);
             double ms = (System.nanoTime() - start) / 1e6 / 180;
             BoxDiagnostics state = scene.diagnostics();
             double overlap = 0;

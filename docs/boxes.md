@@ -1,6 +1,6 @@
 # Boxes: a contact manifold, and stacking measured
 
-Planned on 2026-10-19. Stages 1 to 5 are built; the rest is not yet. The plan follows the sphere work: each stage is
+Planned on 2026-10-19. Stages 1 to 6 are built; the rest is not yet. The plan follows the sphere work: each stage is
 built far enough to be measured against a known answer, and records what it found under its own heading. Where a
 measurement changes the plan, the stage says how.
 
@@ -334,14 +334,57 @@ built first, and measured:
   step found them centimetres deep and corrected them in one substep, at tens of metres a second. On the soft step
   the push is capped at 3 m/s.
 
-**Cost:** about 8 to 11 ms a step on the GPU for ten to fifty-five boxes. Most of it is fixed, whatever the number of
-dispatches, and not yet taken apart: the wait for the manifolds, and writing the rounds, are the first suspects.
+**Cost:** about 8 to 11 ms a step on the GPU for ten to fifty-five boxes, as first measured. *Stage 6 found most of
+that was the measurement: the tests timed the kernels' compiling with the steps.*
 
-### 6. Many boxes: the grid, and the cost
+### 6. Many boxes: the grid, and the cost — built, measured (2026-10-19)
 
-The grid sorts boxes by their bounding spheres, which wastes cells on long thin boxes. That is fine for cubes, and
-for anything else it is measured before it is replaced. The sweep gains box scenes: a pile of 343 boxes and one of
-1000, each with friction, giving overlap, energy and ms a step on the GPU and the CPU.
+**The cost first: the "fixed 8 ms" was mostly the measurement.** The stacking tests timed `scene.start` along with
+the steps, and start lowers and compiles every kernel, which takes seconds; spread over 180 steps it added about 5 ms
+to each. Timed apart, part by part, on the GPU at 10 substeps, a step of ten or fifty-five boxes was 2.8 to 4.6 ms.
+About 1.5 to 2 ms of that was the round trip to the host: writing the rounds, one upload per round buffer, 0.7 to 1.6
+ms; reading every manifold back, 0.45 ms; the collide's wait, 0.16 ms. Two changes:
+
+- **One upload a step.** The rounds are one buffer, `rounds`. Each round's pass binds a one-word buffer, `which0` to
+  `which31`, written once, that says where its round begins.
+- **One small read.** A pass after the collide, `BoxBroad.counts`, writes `contacts`, the only buffer the host reads:
+  each slot's partner where it touches, its number of points, and each box's number of partners found.
+
+That brings the host's share to about 0.8 ms (a 0.15 ms wait, a 0.35 ms read, a 0.3 ms write), and a step of ten or
+fifty-five boxes at 10 substeps to 2.3 to 2.5 ms; the rest is the GPU's own work, about 300 dispatches.
+
+**The grid.** `BoxBroad`:
+
+- Boxes are binned by their centres and sorted by SupirVast's counting sort, as the spheres are. A cell is the widest
+  box's bounding diameter plus the margin, so two boxes that can touch are in the same or neighbouring cells.
+- Each box tests the boxes of higher index in its 27 cells, by their bounding boxes in the world's frame, widened by
+  the margin. That is tighter than the bounding spheres the plan had, and as cheap.
+- The pairs it finds go into the box's own `SLOTS` = 32 places in the pair list, in ascending order of partner, the
+  rest −1. A pair is then always slot `first · 32 + m`, and `carry` finds last step's slot by looking through the first
+  box's slots for the same partner. That keeps impulses carried across steps without any atomics or stable sorting.
+- A box with more than 32 partners keeps the first it finds, and the rest are counted as `unlisted`.
+
+`BoxBroadTest`, both backends: 150 boxes, half-extents 2 to 8 cm, turned at random, packed into a metre cube. The grid
+finds the same 218 touching pairs that collide over all 11,175 pairs does, each with the same number of points, and
+no box runs out of slots. Every stacking test gives the same numbers on the grid as on the every-pair list, to the
+digit: the same contacts, solved in the same order, since slots run in ascending order of partner as the list did.
+
+**The piles.** Cubes of 8 cm, half a kilogram, a loose block jittered and turned by up to 0.6 rad, dropped into a
+walled box, friction 0.5; after 4 s, on the GPU:
+
+| Pile | Energy | Deepest point | Touching pairs / points | Rounds | Time a step |
+| --- | --- | --- | --- | --- | --- |
+| 343 | 1.6e-8 J | 0.47 mm (1.2% of a half) | 695 / 1898 | 11 | 6.8 ms |
+| 1000 | 1.0e-6 J | 0.90 mm | 2378 / 5832 | 14 | 7.8 ms |
+
+No pair was left unsolved and no box short of slots. While a pile is falling, the first second, a step costs 24 to 27
+ms: impacts drive points to 8–13 mm deep, the push-apart limit at work, and each new number of rounds records a new
+list of passes. On the CPU through Truffle a pile of 343 takes about a minute a simulated second, and runs only with
+`-Pphysics`; the pile of 1000 runs on the GPU only. The demo has a *Pile of 343 boxes*.
+
+Not done here: the rounds are still made on the host, at one wait a step. On the GPU, as the spheres' contact list
+makes them, they would save that wait, and that is the next cost to take on. The grid's cells are sized by the widest
+box, which would waste cells on a few long thin boxes among small ones; measured only with cubes.
 
 ### 7. Spheres and boxes together
 

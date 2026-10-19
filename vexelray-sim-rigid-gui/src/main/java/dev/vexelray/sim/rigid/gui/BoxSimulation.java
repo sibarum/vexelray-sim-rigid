@@ -28,7 +28,7 @@ public final class BoxSimulation implements RigidSimulation {
     private final BoxStep step;
     private final PassRunner runner;
     private final BoxStepper stepper;
-    private BoxStepper.Report last = new BoxStepper.Report(0, 0, 0, 0);
+    private BoxStepper.Report last = new BoxStepper.Report(0, 0, 0, 0, 0);
 
     /** {@code step} on {@code context}, or on a device of its own if that is null. */
     public BoxSimulation(GpuContext context, BoxStep step) {
@@ -123,10 +123,10 @@ public final class BoxSimulation implements RigidSimulation {
             }
 
             @Override
-            public float[] runAndRead(java.util.List<dev.supirvast.vastir.pass.Pass> passes, String buffer) {
+            public int[] runAndRead(java.util.List<dev.supirvast.vastir.pass.Pass> passes, String buffer) {
                 run(passes);
                 done[0].await();
-                return runner.floats(buffer);
+                return runner.read(buffer);
             }
 
             @Override

@@ -67,6 +67,7 @@ final class BoxScene implements AutoCloseable {
     /** What the steps have taken, added up: see {@link BoxStepper.Report}. */
     int mostRounds;
     long unplaced;
+    long unlisted;
     BoxStepper.Report last;
 
     private Accelerator accelerator;
@@ -103,7 +104,12 @@ final class BoxScene implements AutoCloseable {
     }
 
     BoxScene start(Backend backend) {
-        step = new BoxStep(n, substeps, passes, symmetric);
+        double widest = 0;
+        for (int s = 0; s < n; s++) {
+            widest = Math.max(widest, Math.sqrt(half[0][s] * half[0][s] + half[1][s] * half[1][s]
+                    + half[2][s] * half[2][s]));
+        }
+        step = new BoxStep(n, substeps, passes, symmetric, BoxBroad.grid(sx, sy, sz, widest, margin));
         stepper = new BoxStepper(step);
         if (backend == Backend.CPU) {
             runner = PassRunner.cpu(step, Boxes.WORKGROUP, PassRunner.NO_SUBGROUP);
@@ -154,9 +160,9 @@ final class BoxScene implements AutoCloseable {
             }
 
             @Override
-            public float[] runAndRead(java.util.List<dev.supirvast.vastir.pass.Pass> passes, String buffer) {
+            public int[] runAndRead(java.util.List<dev.supirvast.vastir.pass.Pass> passes, String buffer) {
                 runner.run(passes).await();
-                return runner.floats(buffer);
+                return runner.read(buffer);
             }
 
             @Override
@@ -168,6 +174,7 @@ final class BoxScene implements AutoCloseable {
             last = stepper.step(run);
             mostRounds = Math.max(mostRounds, last.rounds());
             unplaced += last.unplaced();
+            unlisted += last.unlisted();
         }
         return this;
     }
@@ -197,6 +204,16 @@ final class BoxScene implements AutoCloseable {
     /** The picture's buffer as it is on the backend now, {@link Boxes#SHOWN_STRIDE} floats a box. */
     float[] shown() {
         return runner.floats("shown");
+    }
+
+    /** Any float buffer of the step as it is on the backend now. */
+    float[] floats(String name) {
+        return runner.floats(name);
+    }
+
+    /** The step's slots, {@link BoxStep#slots}, for reading its manifolds. */
+    int slots() {
+        return step.slots;
     }
 
     BoxDiagnostics diagnostics() {

@@ -9,6 +9,7 @@ import dev.vexelray.sim.core.gui.AppCompute;
 import dev.vexelray.sim.rigid.demo.Messages.Build;
 import dev.vexelray.sim.rigid.demo.Messages.Next;
 import dev.vexelray.sim.rigid.demo.Messages.Relax;
+import dev.vexelray.sim.rigid.box.BoxBroad;
 import dev.vexelray.sim.rigid.box.BoxDiagnostics;
 import dev.vexelray.sim.rigid.box.BoxStep;
 import dev.vexelray.sim.rigid.box.Boxes;
@@ -189,7 +190,13 @@ final class Physics implements AutoCloseable {
     /** A simulation of {@code from}, spheres or boxes as it holds, made on {@code backend} and started. */
     private void install(Scenario.State from, Build b, RigidRunner.Backend backend) {
         if (from.boxes) {
-            BoxStep step = new BoxStep(from.n, b.substeps());
+            double widest = 0;
+            for (int k = 0; k < from.n; k++) {
+                widest = Math.max(widest, Math.sqrt(from.half[0][k] * from.half[0][k] + from.half[1][k] * from.half[1][k]
+                        + from.half[2][k] * from.half[2][k]));
+            }
+            BoxStep step = new BoxStep(from.n, b.substeps(), Boxes.WALL_PASSES, false,
+                    BoxBroad.grid(from.extent[0], from.extent[1], from.extent[2], widest, BOX_MARGIN));
             spheres = null;
             boxes = runner.install(step, backend, from.extent, s -> s.start(from.x, from.y, from.z, from.u, from.v,
                     from.w, from.spin, from.q, from.half, from.im, boxParams(b.substeps(), from)));

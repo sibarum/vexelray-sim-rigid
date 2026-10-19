@@ -141,9 +141,13 @@ public final class BoxContact {
 
         Body b = new Body();
         LocalVar p = b.let("p", new Expr.InvocationId());
-        b.when(lt(v(p), new Expr.InvocationCount()), t -> {
+        b.when(lt(v(p), new Expr.InvocationCount()), slot -> {
+            // An empty slot, its second box −1, has no contact.
+            LocalVar partner = slot.let("partner", load(pairs, add(mul(v(p), i(2)), i(1))));
+            slot.store(manifold, add(mul(v(p), i(MANIFOLD_WORDS)), i(COUNT)), f(0));
+            slot.when(not(lt(v(partner), i(0))), t -> {
             Solid first = new Solid(t, bs, load(pairs, mul(v(p), i(2))));
-            Solid second = new Solid(t, bs, load(pairs, add(mul(v(p), i(2)), i(1))));
+            Solid second = new Solid(t, bs, v(partner));
             LocalVar margin = t.let("margin", load(params, i(Boxes.MARGIN)));
             LocalVar[] d = sub3(t, second.centre, first.centre);
             LocalVar out = t.let("out", mul(v(p), i(MANIFOLD_WORDS)));
@@ -228,6 +232,7 @@ public final class BoxContact {
                         bestFaceAxis, d, margin).contact(faces, candidates, scratch, count, manifold, out));
             });
             t.store(manifold, add(v(out), i(COUNT)), toFloat(v(count)));
+            });
         });
         return new Function("boxesCollide", new Type.FunctionType(Type.VOID, List.of()), b.finish());
     }
