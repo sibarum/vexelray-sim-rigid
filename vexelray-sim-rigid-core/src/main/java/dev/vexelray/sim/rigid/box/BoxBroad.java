@@ -89,9 +89,9 @@ public final class BoxBroad {
     }
 
     static final String[] LIST_NAMES = {"x", "y", "z", "qx", "qy", "qz", "qw", "hx", "hy", "hz", "params", "keys",
-            "starts", "order", "pairs", "contacts"};
+            "starts", "order", "pairs", "contacts", "shape"};
     static final List<Buffer> LIST_BUFFERS = bind(LIST_NAMES, "x", "y", "z", "qx", "qy", "qz", "qw", "hx", "hy", "hz",
-            "params");
+            "params", "shape");
 
     /**
      * One invocation per box: its slots in {@code pairs} filled with the boxes of higher index near it, in ascending
@@ -190,8 +190,8 @@ public final class BoxBroad {
     // --- building blocks -----------------------------------------------------------------------------------
 
     /**
-     * Box {@code s}'s half-extents in the world's frame: the half-size of the box, axis-aligned, that bounds it,
-     * {@code Σ_k h_k |R_ak|}.
+     * Body {@code s}'s half-extents in the world's frame: the half-size of the box, axis-aligned, that bounds it,
+     * {@code Σ_k h_k |R_ak|}; a sphere's radius.
      */
     private static LocalVar[] reach(Body b, List<Buffer> bs, LocalVar s) {
         LocalVar x = b.let("qx", load(bs.get(3), v(s)));
@@ -217,6 +217,12 @@ public final class BoxBroad {
             out[a] = b.let("reach", add(add(mul(v(half[0]), abs(r[a][0])), mul(v(half[1]), abs(r[a][1]))),
                     mul(v(half[2]), abs(r[a][2]))));
         }
+        // A sphere's bounds are its radius on every axis, however it is turned.
+        b.when(gt(load(bs.get(16), v(s)), f(0.5f)), round -> {
+            for (int a = 0; a < 3; a++) {
+                round.set(out[a], v(half[0]));
+            }
+        });
         return out;
     }
 

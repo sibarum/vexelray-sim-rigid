@@ -199,7 +199,7 @@ final class Physics implements AutoCloseable {
                     BoxBroad.grid(from.extent[0], from.extent[1], from.extent[2], widest, BOX_MARGIN));
             spheres = null;
             boxes = runner.install(step, backend, from.extent, s -> s.start(from.x, from.y, from.z, from.u, from.v,
-                    from.w, from.spin, from.q, from.half, from.im, boxParams(b.substeps(), from)));
+                    from.w, from.spin, from.q, from.half, from.shape, from.im, boxParams(b.substeps(), from)));
             sim = boxes;
         } else {
             SphereStep step = new SphereStep(from.n, b.substeps(), b.iterations(), from.grid(), b.solve());
@@ -221,7 +221,7 @@ final class Physics implements AutoCloseable {
         float[][] now = boxes.state();
         boxRead = BoxDiagnostics.of(now[0], now[1], now[2], now[3], now[4], now[5],
                 new float[][] {now[6], now[7], now[8]}, new float[][] {now[9], now[10], now[11], now[12]},
-                state.half, state.im);
+                state.half, state.shape, state.im);
         boxFastest = 0;
         for (int k = 0; k < state.n; k++) {
             boxFastest = Math.max(boxFastest, Math.sqrt(now[3][k] * now[3][k] + now[4][k] * now[4][k]
@@ -256,10 +256,10 @@ final class Physics implements AutoCloseable {
         return s;
     }
 
-    /** Boxes' parameters: the friction control as both coefficients, and the walls' default sweeps. */
+    /** Boxes' parameters: the friction control as both coefficients, and the rolling control for balls among them. */
     private int[] boxParams(int substeps, Scenario.State s) {
         return Boxes.params(STEP_SECONDS / substeps, 0, s.gravity, 0, s.extent[0], s.extent[1], s.extent[2], friction,
-                friction, BOX_MARGIN);
+                friction, BOX_MARGIN, rolling);
     }
 
     private int[] params(int substeps, Scenario.State s) {

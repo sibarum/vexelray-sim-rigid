@@ -13,10 +13,10 @@ public record BoxDiagnostics(double kinetic, double rotational, double[] momentu
 
     /**
      * The state's diagnostics, from per-box arrays as {@link BoxStep} holds them; {@code l} is {@code lx, ly, lz},
-     * {@code q} {@code qx, qy, qz, qw} and {@code half} {@code hx, hy, hz}.
+     * {@code q} {@code qx, qy, qz, qw}, {@code half} {@code hx, hy, hz} and {@code shape} each body's shape.
      */
     public static BoxDiagnostics of(float[] x, float[] y, float[] z, float[] u, float[] v, float[] w, float[][] l,
-                                    float[][] q, float[][] half, float[] im) {
+                                    float[][] q, float[][] half, float[] shape, float[] im) {
         double kinetic = 0;
         double rotational = 0;
         double[] momentum = new double[3];
@@ -30,7 +30,7 @@ public record BoxDiagnostics(double kinetic, double rotational, double[] momentu
             double[] vel = {u[s], v[s], w[s]};
             double[] spun = {l[0][s], l[1][s], l[2][s]};
             double[] omega = spin(spun, new double[] {q[0][s], q[1][s], q[2][s], q[3][s]},
-                    Boxes.inertia(m, half[0][s], half[1][s], half[2][s]));
+                    Boxes.inertia(shape[s], m, half[0][s], half[1][s], half[2][s]));
             double[] orbit = cross(at, vel);
             for (int a = 0; a < 3; a++) {
                 kinetic += 0.5 * m * vel[a] * vel[a];

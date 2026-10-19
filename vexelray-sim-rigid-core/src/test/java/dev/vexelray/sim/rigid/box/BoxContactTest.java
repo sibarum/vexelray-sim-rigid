@@ -253,10 +253,88 @@ class BoxContactTest {
         assertTrue(closest < 1e-5, what + ": not on a face, " + closest + " m inside");
     }
 
+    // --- spheres --------------------------------------------------------------------------------------------
+
+    /** A ball of 5 cm resting 1 cm into the slab's top: one point, straight up, under its centre. */
+    @ParameterizedTest
+    @MethodSource("dev.vexelray.sim.rigid.box.BoxScene#backends")
+    void aBallOnASlabTouchesUnderItsCentre(Backend backend) {
+        Solid slab = box(0, 0, 0, SLAB, IDENTITY);
+        Solid ball = ball(0, 0.14, 0, 0.05);
+        Contact c = new Contact(collide(backend, 0, slab, ball), slab, ball);
+        c.face(BoxContact.SPHERE_BOX, 0, 1, 0);
+        c.pointsOn(0.01, new double[][] {{0, 0.1, 0}}, new double[][] {{0, 0.09, 0}});
+    }
+
+    /** The same pair the other way round: the normal down, from the ball to the slab. */
+    @ParameterizedTest
+    @MethodSource("dev.vexelray.sim.rigid.box.BoxScene#backends")
+    void aBallFirstTurnsTheNormal(Backend backend) {
+        Solid slab = box(0, 0, 0, SLAB, IDENTITY);
+        Solid ball = ball(0, 0.14, 0, 0.05);
+        Contact c = new Contact(collide(backend, 0, ball, slab), ball, slab);
+        c.face(BoxContact.SPHERE_BOX, 0, -1, 0);
+        c.pointsOn(0.01, new double[][] {{0, 0.09, 0}}, new double[][] {{0, 0.1, 0}});
+    }
+
+    /**
+     * A ball over the slab's edge, its centre 3 cm out and 3 cm up from it: the nearest point is on the edge, the
+     * normal at 45°, the depth the radius less √0.0018.
+     */
+    @ParameterizedTest
+    @MethodSource("dev.vexelray.sim.rigid.box.BoxScene#backends")
+    void aBallOverAnEdgeTouchesTheEdge(Backend backend) {
+        Solid slab = box(0, 0, 0, SLAB, IDENTITY);
+        Solid ball = ball(0.33, 0.13, 0, 0.05);
+        Contact c = new Contact(collide(backend, 0, slab, ball), slab, ball);
+        double d = 1 / R2;
+        c.face(BoxContact.SPHERE_BOX, d, d, 0);
+        double depth = 0.05 - 0.03 * R2;
+        c.pointsOn(depth, new double[][] {{0.3, 0.1, 0}}, new double[][] {{0.33 - 0.05 * d, 0.13 - 0.05 * d, 0}});
+    }
+
+    /** A ball whose centre is 1 cm inside the slab's top: pushed out through the top, 6 cm deep. */
+    @ParameterizedTest
+    @MethodSource("dev.vexelray.sim.rigid.box.BoxScene#backends")
+    void aBallWithItsCentreInsideIsPushedOutTheNearestFace(Backend backend) {
+        Solid slab = box(0, 0, 0, SLAB, IDENTITY);
+        Solid ball = ball(0.1, 0.09, 0.05, 0.05);
+        Contact c = new Contact(collide(backend, 0, slab, ball), slab, ball);
+        c.face(BoxContact.SPHERE_BOX, 0, 1, 0);
+        c.pointsOn(0.06, new double[][] {{0.1, 0.1, 0.05}}, new double[][] {{0.1, 0.04, 0.05}});
+    }
+
+    /** Two balls, 5 and 4 cm, their centres 8 cm apart: 1 cm deep, along the line between them. */
+    @ParameterizedTest
+    @MethodSource("dev.vexelray.sim.rigid.box.BoxScene#backends")
+    void twoBallsTouchOnTheLineBetweenThem(Backend backend) {
+        Solid first = ball(0, 0, 0, 0.05);
+        Solid second = ball(0.08, 0, 0, 0.04);
+        Contact c = new Contact(collide(backend, 0, first, second), first, second);
+        c.face(BoxContact.SPHERE_SPHERE, 1, 0, 0);
+        c.pointsOn(0.01, new double[][] {{0.05, 0, 0}}, new double[][] {{0.04, 0, 0}});
+    }
+
+    /** A ball 5 cm above the slab: no contact with no margin. */
+    @ParameterizedTest
+    @MethodSource("dev.vexelray.sim.rigid.box.BoxScene#backends")
+    void aBallApartHasNoContact(Backend backend) {
+        assertEquals(0, collide(backend, 0, box(0, 0, 0, SLAB, IDENTITY), ball(0, 0.2, 0, 0.05))[BoxContact.COUNT],
+                "count");
+    }
+
+    private static Solid ball(double x, double y, double z, double r) {
+        return new Solid(new double[] {x, y, z}, new double[] {r, r, r}, IDENTITY, Boxes.SPHERE_SHAPE);
+    }
+
     // --- the cases' working --------------------------------------------------------------------------------
 
     /** A box: centre, half-extents and orientation. */
-    record Solid(double[] centre, double[] half, double[] q) {
+    record Solid(double[] centre, double[] half, double[] q, float shape) {
+
+        Solid(double[] centre, double[] half, double[] q) {
+            this(centre, half, q, Boxes.BOX_SHAPE);
+        }
 
         /** {@code anchor}, in this box's frame, in the world's. */
         double[] world(float[] m, int at) {
@@ -378,11 +456,12 @@ class BoxContactTest {
             runner.clear();
         }
         try {
-            String[] names = {"x", "y", "z", "qx", "qy", "qz", "qw", "hx", "hy", "hz"};
+            String[] names = {"x", "y", "z", "qx", "qy", "qz", "qw", "hx", "hy", "hz", "shape"};
             for (int k = 0; k < names.length; k++) {
                 float[] values = new float[boxes.length];
                 for (int s = 0; s < boxes.length; s++) {
-                    values[s] = (float) (k < 3 ? boxes[s].centre[k] : k < 7 ? boxes[s].q[k - 3] : boxes[s].half[k - 7]);
+                    values[s] = k == 10 ? boxes[s].shape : (float) (k < 3 ? boxes[s].centre[k] : k < 7
+                            ? boxes[s].q[k - 3] : boxes[s].half[k - 7]);
                 }
                 runner.write(names[k], values);
             }
@@ -408,7 +487,7 @@ class BoxContactTest {
         final List<Pass> passes;
 
         Program(int boxes, int pairs) {
-            for (String name : List.of("x", "y", "z", "qx", "qy", "qz", "qw", "hx", "hy", "hz")) {
+            for (String name : List.of("x", "y", "z", "qx", "qy", "qz", "qw", "hx", "hy", "hz", "shape")) {
                 buffers.put(name, new BufferSpec(name, Body.F32, boxes));
             }
             buffers.put("params", new BufferSpec("params", Body.F32, Boxes.PARAM_COUNT));

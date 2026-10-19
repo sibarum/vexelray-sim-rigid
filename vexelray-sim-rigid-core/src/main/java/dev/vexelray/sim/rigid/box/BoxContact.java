@@ -26,6 +26,7 @@ import static dev.supirvast.vastir.build.Body.min;
 import static dev.supirvast.vastir.build.Body.mul;
 import static dev.supirvast.vastir.build.Body.neg;
 import static dev.supirvast.vastir.build.Body.not;
+import static dev.supirvast.vastir.build.Body.or;
 import static dev.supirvast.vastir.build.Body.sqrt;
 import static dev.supirvast.vastir.build.Body.sub;
 import static dev.supirvast.vastir.build.Body.toFloat;
@@ -122,7 +123,7 @@ public final class BoxContact {
     private static final float OFF_LINE = 1e-4f;
 
     public static final String[] NAMES = {"x", "y", "z", "qx", "qy", "qz", "qw", "hx", "hy", "hz", "params", "pairs",
-            "manifold", "candidates"};
+            "manifold", "candidates", "shape"};
     public static final List<Buffer> BUFFERS = bind();
 
     private BoxContact() {
@@ -138,6 +139,7 @@ public final class BoxContact {
         Buffer pairs = bs.get(11);
         Buffer manifold = bs.get(12);
         Buffer candidates = bs.get(13);
+        Buffer shape = bs.get(14);
 
         Body b = new Body();
         LocalVar p = b.let("p", new Expr.InvocationId());
@@ -146,8 +148,11 @@ public final class BoxContact {
             LocalVar partner = slot.let("partner", load(pairs, add(mul(v(p), i(2)), i(1))));
             slot.store(manifold, add(mul(v(p), i(MANIFOLD_WORDS)), i(COUNT)), f(0));
             slot.when(not(lt(v(partner), i(0))), t -> {
-            Solid first = new Solid(t, bs, load(pairs, mul(v(p), i(2))));
+            LocalVar ia = t.let("ia", load(pairs, mul(v(p), i(2))));
+            Solid first = new Solid(t, bs, v(ia));
             Solid second = new Solid(t, bs, v(partner));
+            LocalVar shapeA = t.let("shapeA", load(shape, v(ia)));
+            LocalVar shapeB = t.let("shapeB", load(shape, v(partner)));
             LocalVar margin = t.let("margin", load(params, i(Boxes.MARGIN)));
             LocalVar[] d = sub3(t, second.centre, first.centre);
             LocalVar out = t.let("out", mul(v(p), i(MANIFOLD_WORDS)));
@@ -232,9 +237,151 @@ public final class BoxContact {
                         bestFaceAxis, d, margin).contact(faces, candidates, scratch, count, manifold, out));
             });
             t.store(manifold, add(v(out), i(COUNT)), toFloat(v(count)));
+            // A sphere in the pair: its contact in place of what the boxes' test made of it.
+            t.when(or(gt(v(shapeA), f(0.5f)), gt(v(shapeB), f(0.5f))), round -> sphereContact(round, first, second,
+                    shapeA, shapeB, margin, manifold, out));
             });
         });
         return new Function("boxesCollide", new Type.FunctionType(Type.VOID, List.of()), b.finish());
+    }
+
+    // --- a sphere in the pair -----------------------------------------------------------------------------
+
+    /** The axis a manifold reports for a sphere against a box, and for two spheres. */
+    public static final int SPHERE_BOX = 15;
+    public static final int SPHERE_SPHERE = 16;
+
+    /**
+     * A pair with a sphere in it, its radius {@code half[0]}: one point, written over what the boxes' test made of the
+     * pair.
+     *
+     * <ul>
+     *   <li>Two spheres: along the line between their centres.</li>
+     *   <li>A sphere and a box: the box's point nearest the sphere's centre, and the normal from it to the centre;
+     *       or, where the centre is inside the box, the face it is least far in from, and that face's normal.</li>
+     * </ul>
+     *
+     * The normal is turned to point from the first to the second, and the point kept if it is no further apart than
+     * the margin.
+     */
+    private static void sphereContact(Body b, Solid first, Solid second, LocalVar shapeA, LocalVar shapeB,
+                                      LocalVar margin, Buffer manifold, LocalVar out) {
+        LocalVar[] n = zero3(b);
+        LocalVar[] onFirst = zero3(b);
+        LocalVar[] onSecond = zero3(b);
+        LocalVar depth = b.let("depth", f(0));
+        LocalVar axis = b.let("axis", f(SPHERE_BOX));
+        Expr sphereA = gt(v(shapeA), f(0.5f));
+        Expr sphereB = gt(v(shapeB), f(0.5f));
+
+        b.when(and(sphereA, sphereB), both -> {
+            LocalVar[] d = sub3(both, second.centre, first.centre);
+            LocalVar length = both.let("length", sqrt(dot(d, d)));
+            both.set(n[1], f(1));
+            both.when(gt(v(length), f(1e-9f)), apart -> {
+                for (int a = 0; a < 3; a++) {
+                    apart.set(n[a], div(v(d[a]), v(length)));
+                }
+            });
+            both.set(depth, sub(add(v(first.half[0]), v(second.half[0])), v(length)));
+            for (int a = 0; a < 3; a++) {
+                both.set(onFirst[a], add(v(first.centre[a]), mul(v(first.half[0]), v(n[a]))));
+                both.set(onSecond[a], sub(v(second.centre[a]), mul(v(second.half[0]), v(n[a]))));
+            }
+            both.set(axis, f(SPHERE_SPHERE));
+        });
+        // One sphere and one box: the box's nearest point to the sphere, the normal from the box to the sphere.
+        for (int which = 0; which < 2; which++) {
+            boolean sphereFirst = which == 0;
+            Solid round = sphereFirst ? first : second;
+            Solid box = sphereFirst ? second : first;
+            Expr only = sphereFirst ? and(sphereA, not(sphereB)) : and(sphereB, not(sphereA));
+            b.when(only, mixed -> {
+                LocalVar[] towards = zero3(mixed);
+                LocalVar[] surface = zero3(mixed);
+                LocalVar reach = mixed.let("reach", nearest(mixed, box, round.centre, towards, surface));
+                LocalVar radius = round.half[0];
+                mixed.set(depth, sub(v(radius), v(reach)));
+                // towards points from the box to the sphere; the manifold's normal from the first to the second.
+                for (int a = 0; a < 3; a++) {
+                    LocalVar onSphere = mixed.let("onSphere", sub(v(round.centre[a]), mul(v(radius), v(towards[a]))));
+                    if (sphereFirst) {
+                        mixed.set(n[a], neg(v(towards[a])));
+                        mixed.set(onFirst[a], v(onSphere));
+                        mixed.set(onSecond[a], v(surface[a]));
+                    } else {
+                        mixed.set(n[a], v(towards[a]));
+                        mixed.set(onFirst[a], v(surface[a]));
+                        mixed.set(onSecond[a], v(onSphere));
+                    }
+                }
+            });
+        }
+
+        write(b, manifold, out, n, axis);
+        LocalVar kept = b.let("kept", f(0));
+        b.when(gt(v(depth), neg(v(margin))), close -> {
+            writePoint(close, manifold, add(v(out), i(POINTS)), first.own(close, onFirst),
+                    second.own(close, onSecond), v(depth));
+            close.set(kept, f(1));
+        });
+        b.store(manifold, add(v(out), i(COUNT)), v(kept));
+    }
+
+    /**
+     * How far {@code p} is outside {@code box}, along {@code towards}, the unit direction from the box's point nearest
+     * it, {@code surface}, to it. Inside the box, the distance is negative: how far in from its nearest face, whose
+     * outward normal {@code towards} is then, and {@code surface} the point on it.
+     */
+    private static Expr nearest(Body b, Solid box, LocalVar[] p, LocalVar[] towards, LocalVar[] surface) {
+        LocalVar[] off = sub3(b, p, box.centre);
+        LocalVar[] local = new LocalVar[3];
+        LocalVar[] held = new LocalVar[3];
+        for (int k = 0; k < 3; k++) {
+            local[k] = b.let("local", dot(off, box.axes[k]));
+            held[k] = b.let("held", max(neg(v(box.half[k])), min(v(box.half[k]), v(local[k]))));
+        }
+        LocalVar[] outside = new LocalVar[3];
+        for (int k = 0; k < 3; k++) {
+            outside[k] = b.let("outside", sub(v(local[k]), v(held[k])));
+        }
+        LocalVar away = b.let("away", sqrt(dot(outside, outside)));
+        LocalVar reach = b.let("reach", v(away));
+        b.when(gt(v(away), f(1e-9f)), out -> {
+            for (int a = 0; a < 3; a++) {
+                Expr dir = f(0);
+                Expr at = v(box.centre[a]);
+                for (int k = 0; k < 3; k++) {
+                    dir = add(dir, mul(v(outside[k]), v(box.axes[k][a])));
+                    at = add(at, mul(v(held[k]), v(box.axes[k][a])));
+                }
+                out.set(towards[a], div(dir, v(away)));
+                out.set(surface[a], at);
+            }
+        });
+        b.when(not(gt(v(away), f(1e-9f))), in -> {
+            // Inside: the face least far in, of the three pairs.
+            LocalVar least = in.let("least", f(1e30f));
+            for (int kk = 0; kk < 3; kk++) {
+                int k = kk;
+                LocalVar inward = in.let("inward", sub(v(box.half[k]), abs(v(local[k]))));
+                in.when(lt(v(inward), v(least)), nearer -> {
+                    nearer.set(least, v(inward));
+                    LocalVar side = sign(nearer, v(local[k]));
+                    for (int a = 0; a < 3; a++) {
+                        nearer.set(towards[a], mul(v(side), v(box.axes[k][a])));
+                        Expr at = v(box.centre[a]);
+                        for (int j = 0; j < 3; j++) {
+                            Expr along = j == k ? mul(v(side), v(box.half[k])) : v(local[j]);
+                            at = add(at, mul(along, v(box.axes[j][a])));
+                        }
+                        nearer.set(surface[a], at);
+                    }
+                });
+            }
+            in.set(reach, neg(v(least)));
+        });
+        return v(reach);
     }
 
     // --- a box, as the narrow phase holds it ---------------------------------------------------------------

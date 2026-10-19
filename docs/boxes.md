@@ -1,6 +1,6 @@
 # Boxes: a contact manifold, and stacking measured
 
-Planned on 2026-10-19. Stages 1 to 6 are built; the rest is not yet. The plan follows the sphere work: each stage is
+Planned on 2026-10-19. All seven stages are built. The plan follows the sphere work: each stage is
 built far enough to be measured against a known answer, and records what it found under its own heading. Where a
 measurement changes the plan, the stage says how.
 
@@ -386,11 +386,63 @@ Not done here: the rounds are still made on the host, at one wait a step. On the
 makes them, they would save that wait, and that is the next cost to take on. The grid's cells are sized by the widest
 box, which would waste cells on a few long thin boxes among small ones; measured only with cubes.
 
-### 7. Spheres and boxes together
+### 7. Spheres and boxes together — built, measured (2026-10-19)
 
-A sphere against a box is the closest point on the box to the sphere's centre, as one point. This stage decides
-whether the two shapes share one body list and one contact list, or step as two that meet. It is chosen from what
-stages 1–6 found about how much the solves share.
+**Decided: one body list, on the soft step.** By the end of stage 6 the two shapes did not share a solver. The
+spheres' is positional: Gauss–Seidel moves the bodies, and the velocities follow from the moves. The boxes' is at
+the level of velocities: impulses change the velocities, and the positions follow. A contact between a sphere and a
+box has to be solved by one of them, at one point in the substep. Two lists stepping apart and meeting would hand
+impulses across that mismatch every substep, with nowhere clean to do it. So a sphere is now a shape in the boxes'
+solver: a body whose `shape` is `SPHERE_SHAPE`, its radius in all three half-extents. The spheres' own solver stays
+as it is: the measured experiment the sphere scenarios run on, and the one with the grid and the rounds made on the
+GPU.
+
+What a sphere needed:
+
+- **Inertia:** `⅖ m r²` about every axis, from its shape, where a box's comes from its extents.
+- **Walls:** one contact a wall, its point nearest the wall, where a box has eight corners.
+- **Narrow phase:** `BoxContact` keeps the boxes' test and, where a sphere is in the pair, writes one point over it:
+  - two spheres: along the line between the centres;
+  - a sphere and a box: the box's point nearest the sphere's centre, the normal from it to the centre; or, where the
+    centre is inside the box, the face it is least far in from.
+- **Its point in the solve:** the radius along the normal, never an anchor turned with the sphere. A rolling ball's
+  anchor would leave the surface within a step. For the same reason `carry` hands a one-point contact's impulses to
+  the one point of the next step, whatever its anchors did.
+- **Broad phase:** a sphere's bounds are its radius on every axis.
+- **Rolling resistance**, the spheres' answer again (`Boxes.roll`). It is an angular impulse against the two bodies
+  turning against each other, rolling and twisting, warm started, held to `μr R λₙ`. It applies only where a sphere is
+  in the contact; a box's faces stop it.
+- **The picture:** the shape in a spare word of `shown`; the box shader meets a sphere by its quadratic and paints it
+  in octants of its own frame.
+
+The rolling resistance was not in the stage's plan; a measurement put it there. A mixed pile of 64 balls and 64 cubes,
+friction 0.5, came to rest only in part: the cubes at 9e-6 m/s, the balls still rolling at 3 cm/s after 4 s. Friction
+holds a contact point still, and a rolling ball's is still. The spheres found this first.
+
+`BoxContactTest`, both backends, each hand-worked:
+
+| Case | Known answer |
+| --- | --- |
+| A ball 1 cm into the slab | one point under its centre, normal up |
+| The same pair the other way round | normal down |
+| A ball over the slab's edge, 3 cm out and up | the point on the edge, normal at 45°, depth `r − 0.03 √2` |
+| A ball with its centre inside the slab | pushed out through the nearest face, 6 cm deep |
+| Two balls, 5 and 4 cm, 8 cm apart | 1 cm deep, along the line between them |
+| A ball 5 cm above the slab | no contact |
+
+`BoxSphereTest`, both backends but the pile:
+
+| Case | Known answer | Measured |
+| --- | --- | --- |
+| A ball on a free cube | rests on its top, centred | 0.02 mm in, 1e-6 m off, 1e-11 J |
+| A ball sliding at 2 m/s on a fixed slab, μ = 0.3 | rolls at `5/7 v₀`, `ω = v / r` | 1.4286 m/s, −28.571 rad/s, both exact to the digits printed |
+| A ball rolling at 1 m/s, μr = 0.1, on the floor and on a slab | slows at `5/7 μr g`: 0.6496 m/s after 0.5 s | 0.6496 m/s, still rolling, both |
+| A ball of 1 kg at 2 m/s into a free box of 1 kg | momentum kept; inelastic | 2.000000; both at 1.0000 m/s |
+| A box on four fixed balls | rests level | tilt 3e-8 rad, 2e-17 J |
+| 64 balls and 64 cubes, μ 0.5, μr 0.3 | rests | 4e-12 J, deepest point 0.21 mm, 10 rounds |
+
+The broad phase and every box test give the same numbers as before, since a body that is a box takes the same path.
+The demo has *Balls and boxes*, with the rolling control now passed to box scenes.
 
 ## Risks, and what would change the plan
 

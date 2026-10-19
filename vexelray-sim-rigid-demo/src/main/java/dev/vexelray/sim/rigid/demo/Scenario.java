@@ -126,6 +126,32 @@ enum Scenario {
         }
     },
 
+    BALLS_AND_BOXES("Balls and boxes", "64 balls and 64 cubes of 8 cm, in a loose block, dropped. Balls are bodies"
+            + " of the boxes' solver, its contact with a box the box's point nearest the ball. Friction alone does not"
+            + " stop a ball rolling; rolling resistance does. They take the substeps, friction and rolling controls.") {
+        @Override
+        State start() {
+            int side = 4;
+            State s = State.boxes(2 * side * side * side, 1, 2.5, 1, -9.81);
+            Random random = new Random(3);
+            int k = 0;
+            for (int i = 0; i < side; i++) {
+                for (int j = 0; j < 2 * side; j++) {
+                    for (int l = 0; l < side; l++, k++) {
+                        double x = 0.35 + 0.1 * i + 0.02 * random.nextDouble();
+                        double z = 0.35 + 0.1 * l + 0.02 * random.nextDouble();
+                        if (k % 2 == 0) {
+                            s.ball(k, x, 0.3 + 0.1 * j, z, 0.04, 0.5);
+                        } else {
+                            s.box(k, x, 0.3 + 0.1 * j, z, 0.04, 0.04, 0.04, 0.5, IDENTITY, new double[3]);
+                        }
+                    }
+                }
+            }
+            return s;
+        }
+    },
+
     BOX_PILE("Pile of 343 boxes", "Cubes of 8 cm, a loose block seven a side, each turned a little, dropped. The grid"
             + " finds the pairs near enough to touch, and the touching ones are solved in rounds that share no cube."
             + " Boxes take only the substeps and friction controls.") {
@@ -164,7 +190,8 @@ enum Scenario {
 
     /** Whether its bodies are boxes, which take only the substeps and friction controls. */
     boolean boxes() {
-        return this == SPINNING_BOX || this == DROPPED_BOXES || this == PYRAMID || this == BOX_PILE;
+        return this == SPINNING_BOX || this == DROPPED_BOXES || this == PYRAMID || this == BOX_PILE
+                || this == BALLS_AND_BOXES;
     }
 
     /** A cube of {@code side³} spheres, loosely spaced and jittered, above the floor of a square box. */
@@ -214,6 +241,8 @@ enum Scenario {
         final float[][] half;
         final float[][] q;
         final float[][] spin;
+        /** Each body's shape, where {@link #boxes}: {@code Boxes.BOX_SHAPE} or {@code SPHERE_SHAPE}. */
+        final float[] shape;
 
         State(int n, double sx, double sy, double sz) {
             this(n, sx, sy, sz, false, -9.81);
@@ -235,12 +264,19 @@ enum Scenario {
             half = new float[3][n];
             q = new float[4][n];
             spin = new float[3][n];
+            shape = new float[n];
             java.util.Arrays.fill(q[3], 1);
         }
 
         /** {@code n} boxes in a box of this size, under {@code gravity} along y. */
         static State boxes(int n, double sx, double sy, double sz, double gravity) {
             return new State(n, sx, sy, sz, true, gravity);
+        }
+
+        /** Body {@code k} a ball of radius {@code r}, among boxes. */
+        void ball(int k, double px, double py, double pz, double r, double mass) {
+            box(k, px, py, pz, r, r, r, mass, new double[] {0, 0, 0, 1}, new double[3]);
+            shape[k] = 1;
         }
 
         void box(int k, double px, double py, double pz, double hx, double hy, double hz, double mass,

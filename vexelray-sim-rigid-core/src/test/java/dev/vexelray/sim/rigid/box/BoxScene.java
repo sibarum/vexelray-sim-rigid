@@ -43,6 +43,8 @@ final class BoxScene implements AutoCloseable {
     final float[][] q;
     /** The half-extents along the box's own axes. */
     final float[][] half;
+    /** Each body's shape: {@link Boxes#BOX_SHAPE}, the default, or {@link Boxes#SPHERE_SHAPE}. */
+    final float[] shape;
     final float[] im;
 
     double gx;
@@ -57,6 +59,8 @@ final class BoxScene implements AutoCloseable {
     /** Friction at the walls, static and kinetic: {@link Boxes#walls}. */
     double muStatic;
     double muKinetic;
+    /** Rolling resistance where a sphere is in a contact: {@link Boxes#roll}. */
+    double muRolling;
     /** Sweeps of each kind a substep makes over its contacts, the walls' and the pairs'. */
     int passes = Boxes.WALL_PASSES;
     /** How far apart two boxes may be at the start of a step and still have their contact found. */
@@ -90,8 +94,18 @@ final class BoxScene implements AutoCloseable {
         q = new float[4][n];
         java.util.Arrays.fill(q[3], 1);
         half = new float[3][n];
+        shape = new float[n];
         im = new float[n];
         java.util.Arrays.fill(im, 1);
+    }
+
+    /** Body {@code s} a sphere of radius {@code r}. */
+    BoxScene sphere(int s, double r) {
+        shape[s] = Boxes.SPHERE_SHAPE;
+        for (int a = 0; a < 3; a++) {
+            half[a][s] = (float) r;
+        }
+        return this;
     }
 
     /** Every box these half-extents and this mass. */
@@ -126,7 +140,7 @@ final class BoxScene implements AutoCloseable {
         }
         step.constants().forEach(runner::write);
         runner.write("params", Boxes.params(dt / substeps, gx, gy, gz, sx, sy, sz, muStatic, muKinetic,
-                margin));
+                margin, muRolling));
         for (int s = 0; s < n; s++) {
             if (im[s] <= 0) {
                 continue;
@@ -148,6 +162,7 @@ final class BoxScene implements AutoCloseable {
             runner.write(turn[k], q[k]);
         }
         runner.write("im", im);
+        runner.write("shape", shape);
         return this;
     }
 
@@ -218,7 +233,7 @@ final class BoxScene implements AutoCloseable {
 
     BoxDiagnostics diagnostics() {
         read();
-        return BoxDiagnostics.of(x, y, z, u, v, w, l, q, half, im);
+        return BoxDiagnostics.of(x, y, z, u, v, w, l, q, half, shape, im);
     }
 
     private double[] turn(int s) {
@@ -226,7 +241,7 @@ final class BoxScene implements AutoCloseable {
     }
 
     private double[] moment(int s) {
-        return Boxes.inertia(1 / im[s], half[0][s], half[1][s], half[2][s]);
+        return Boxes.inertia(shape[s], 1 / im[s], half[0][s], half[1][s], half[2][s]);
     }
 
     /** Box {@code s}'s angular velocity in its own frame, as the state was last {@link #read}. */

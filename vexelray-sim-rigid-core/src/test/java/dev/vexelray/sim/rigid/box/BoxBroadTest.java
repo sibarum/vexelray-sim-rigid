@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
  */
 class BoxBroadTest {
 
-    private static final String[] FIELDS = {"x", "y", "z", "qx", "qy", "qz", "qw", "hx", "hy", "hz"};
+    private static final String[] FIELDS = {"x", "y", "z", "qx", "qy", "qz", "qw", "hx", "hy", "hz", "shape"};
     private static final double MARGIN = 0.005;
 
     /**

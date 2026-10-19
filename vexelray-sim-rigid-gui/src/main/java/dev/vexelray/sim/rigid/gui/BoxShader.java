@@ -21,6 +21,7 @@ import static dev.supirvast.vastir.build.Body.min;
 import static dev.supirvast.vastir.build.Body.mix;
 import static dev.supirvast.vastir.build.Body.mul;
 import static dev.supirvast.vastir.build.Body.neg;
+import static dev.supirvast.vastir.build.Body.not;
 import static dev.supirvast.vastir.build.Body.sqrt;
 import static dev.supirvast.vastir.build.Body.sub;
 import static dev.supirvast.vastir.build.Body.toFloat;
@@ -36,6 +37,10 @@ import static dev.supirvast.vastir.build.Body.v;
  * faces is a slab the ray is inside between two distances, and the box is where all three overlap. The face the ray
  * entered by is the normal, turned back into the world's frame. A sphere around each box is tested first, so a pixel
  * spends the slab test only on boxes it may meet nearer than anything yet.
+ *
+ * <p>A body whose shape is a sphere ({@code Boxes.SPHERE_SHAPE}) is met by its quadratic instead, in its own frame, and
+ * painted in octants of that frame, paler and darker, as the spheres' own picture paints them, so that it shows
+ * rolling.
  *
  * <p>A box's edges are drawn darker, a band 6% of its smallest half-extent wide, so that how it is turned reads even
  * where two faces are lit alike.
@@ -54,6 +59,9 @@ final class BoxShader {
     /** Below this a ray is taken as running along a slab, never crossing it. */
     private static final double PARALLEL = 1e-9;
 
+    /** How far toward white a sphere's paler octants are, as in the spheres' picture. */
+    private static final double PALE = 0.45;
+
     private BoxShader() {
     }
 
@@ -68,6 +76,7 @@ final class BoxShader {
         LocalVar best = b.let("best", f(1e30));
         LocalVar hit = b.let("hit", f(-1));
         LocalVar edged = b.let("edged", f(0));
+        LocalVar pale = b.let("pale", f(0));
         LocalVar[] normal = {b.let("nx", f(0)), b.let("ny", f(0)), b.let("nz", f(0))};
         LocalVar k = b.let("k", i(0));
         b.loop(lt(v(k), v(frame.count)), pass -> {
@@ -88,14 +97,14 @@ final class BoxShader {
                 Expr ahead = gt(sub(v(root), v(along)), f(0));
                 Expr sooner = lt(sub(neg(v(along)), v(root)), v(best));
                 meets.when(and(ahead, sooner), near -> slabs(near, k, base, o, half, d, alpha, best, hit, edged,
-                        normal));
+                        pale, normal));
             });
             pass.set(k, add(v(k), i(1)));
         });
 
         LocalVar[] rgb = Picture.background(b, frame, best);
         b.when(gt(v(hit), f(-0.5)), box -> {
-            Picture.shade(box, rgb, frame, hit, normal, f(0));
+            Picture.shade(box, rgb, frame, hit, normal, mul(f(PALE), v(pale)));
             for (int a = 0; a < 3; a++) {
                 box.set(rgb[a], mul(v(rgb[a]), mix(f(1), f(EDGE_LIGHT), v(edged))));
             }
@@ -108,7 +117,8 @@ final class BoxShader {
      * edge's band, if nearer than {@code best}. {@code o} is the eye less the box's blended centre.
      */
     private static void slabs(Body b, LocalVar k, LocalVar base, LocalVar[] o, LocalVar[] half, LocalVar[] d,
-                              LocalVar alpha, LocalVar best, LocalVar hit, LocalVar edged, LocalVar[] normal) {
+                              LocalVar alpha, LocalVar best, LocalVar hit, LocalVar edged, LocalVar pale,
+                              LocalVar[] normal) {
         // The orientation, blended the short way round, and left unnormalised: rotate divides by its length.
         LocalVar[] before = new LocalVar[4];
         LocalVar[] after = new LocalVar[4];
@@ -127,6 +137,33 @@ final class BoxShader {
         LocalVar[] os = rotate(b, inverse, o);
         LocalVar[] ds = rotate(b, inverse, d);
 
+        // A sphere, its radius the first half-extent: met where a quadratic says, in its own frame, and painted in
+        // octants of that frame, as the spheres' picture paints them, so that its turning shows.
+        LocalVar round = b.let("round", load(SHOWN, add(v(base), i(Boxes.SHAPE))));
+        b.when(gt(v(round), f(0.5f)), ball -> {
+            LocalVar hh = ball.let("hh", Picture.dot(os, ds));
+            LocalVar cc = ball.let("cc", sub(Picture.dot(os, os), mul(v(half[0]), v(half[0]))));
+            LocalVar disc = ball.let("ballDisc", sub(mul(v(hh), v(hh)), mul(Picture.dot(ds, ds), v(cc))));
+            ball.when(gt(v(disc), f(0)), crosses -> {
+                LocalVar t = crosses.let("tBall", div(sub(neg(v(hh)), sqrt(v(disc))), Picture.dot(ds, ds)));
+                crosses.when(and(gt(v(t), f(0)), lt(v(t), v(best))), nearer -> {
+                    nearer.set(best, v(t));
+                    nearer.set(hit, toFloat(v(k)));
+                    LocalVar[] own = new LocalVar[3];
+                    for (int a = 0; a < 3; a++) {
+                        own[a] = nearer.let("own", add(v(os[a]), mul(v(t), v(ds[a]))));
+                    }
+                    LocalVar[] world = rotate(nearer, q, own);
+                    for (int a = 0; a < 3; a++) {
+                        nearer.set(normal[a], v(world[a]));
+                    }
+                    nearer.set(edged, f(0));
+                    nearer.set(pale, f(0));
+                    nearer.when(gt(mul(mul(v(own[0]), v(own[1])), v(own[2])), f(0)), patch -> patch.set(pale, f(1)));
+                });
+            });
+        });
+
         // Each slab's entry and exit; the box is where the ray is inside all three.
         LocalVar enter = b.let("enter", f(-1e30));
         LocalVar leave = b.let("leave", f(1e30));
@@ -144,7 +181,8 @@ final class BoxShader {
                 later.set(face, f(axis));
             });
         }
-        Expr meets = and(and(lt(v(enter), v(leave)), gt(v(enter), f(0))), lt(v(enter), v(best)));
+        Expr meets = and(and(and(lt(v(enter), v(leave)), gt(v(enter), f(0))), lt(v(enter), v(best))),
+                not(gt(v(round), f(0.5f))));
         b.when(meets, nearer -> {
             nearer.set(best, v(enter));
             nearer.set(hit, toFloat(v(k)));
@@ -170,6 +208,7 @@ final class BoxShader {
             LocalVar toEdge = nearer.let("toEdge", sub(sub(sum, least), most));
             LocalVar band = nearer.let("band", mul(f(EDGE), min(v(half[0]), min(v(half[1]), v(half[2])))));
             nearer.set(edged, f(0));
+            nearer.set(pale, f(0));
             nearer.when(lt(v(toEdge), v(band)), edge -> edge.set(edged, f(1)));
         });
     }

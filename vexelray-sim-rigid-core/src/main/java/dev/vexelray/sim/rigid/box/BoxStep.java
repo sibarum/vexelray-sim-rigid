@@ -99,6 +99,7 @@ public final class BoxStep implements Buffered {
         buffers.put("params", new BufferSpec("params", Body.F32, Boxes.PARAM_COUNT));
         buffers.put("lambda", new BufferSpec("lambda", Body.F32, Boxes.LAMBDA_WORDS * boxes));
         buffers.put("rub", new BufferSpec("rub", Body.F32, Boxes.RUB_WORDS * boxes));
+        buffers.put("roll", new BufferSpec("roll", Body.F32, Boxes.ROLL_WORDS * boxes));
         buffers.put("shown", new BufferSpec("shown", Body.F32, Boxes.SHOWN_STRIDE * boxes));
 
         velocities = new Pass("velocities", Boxes.velocities(), Boxes.VELOCITIES_BUFFERS,

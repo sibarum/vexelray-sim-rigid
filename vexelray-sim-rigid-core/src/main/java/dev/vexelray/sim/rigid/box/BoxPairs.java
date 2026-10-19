@@ -22,6 +22,7 @@ import static dev.supirvast.vastir.build.Body.i;
 import static dev.supirvast.vastir.build.Body.load;
 import static dev.supirvast.vastir.build.Body.lt;
 import static dev.supirvast.vastir.build.Body.mul;
+import static dev.supirvast.vastir.build.Body.neg;
 import static dev.supirvast.vastir.build.Body.not;
 import static dev.supirvast.vastir.build.Body.or;
 import static dev.supirvast.vastir.build.Body.sub;
@@ -44,10 +45,12 @@ import static dev.supirvast.vastir.build.Body.v;
 public final class BoxPairs {
 
     /** Floats per pair in {@code impulses}: each of its points' normal impulse and tangential impulse. */
-    public static final int IMPULSE_WORDS = BoxContact.MOST_POINTS * 4;
+    public static final int IMPULSE_WORDS = BoxContact.MOST_POINTS * 7;
+    /** Words per point in {@code impulses}: the normal impulse, the tangential, and the rolling. */
+    static final int POINT_IMPULSE = 7;
 
     public static final String[] NAMES = {"x", "y", "z", "qx", "qy", "qz", "qw", "im", "hx", "hy", "hz", "u", "v", "w",
-            "lx", "ly", "lz", "params", "pairs", "manifold", "impulses", "rounds", "which"};
+            "lx", "ly", "lz", "params", "pairs", "manifold", "impulses", "rounds", "which", "shape"};
     public static final List<Buffer> BUFFERS = bindAll(NAMES);
 
     private BoxPairs() {
@@ -72,6 +75,7 @@ public final class BoxPairs {
         Buffer impulses = bs.get(20);
         Buffer rounds = bs.get(21);
         Buffer which = bs.get(22);
+        Buffer shape = bs.get(23);
 
         Body b = new Body();
         LocalVar k = b.let("k", new Expr.InvocationId());
@@ -85,8 +89,10 @@ public final class BoxPairs {
                     LocalVar ib = touching.let("ib", load(pairs, add(mul(v(pair), i(2)), i(1))));
                     LocalVar imA = touching.let("imA", load(im, v(ia)));
                     LocalVar imB = touching.let("imB", load(im, v(ib)));
-                    Boxes.Moving first = new Boxes.Moving(touching, ia, imA, at, turn, half, velocity, spin);
-                    Boxes.Moving second = new Boxes.Moving(touching, ib, imB, at, turn, half, velocity, spin);
+                    Boxes.Moving first = new Boxes.Moving(touching, ia, imA, at, turn, half, velocity, spin,
+                            shape);
+                    Boxes.Moving second = new Boxes.Moving(touching, ib, imB, at, turn, half, velocity, spin,
+                            shape);
                     Boxes.Soft soft = new Boxes.Soft(touching, params, false);
                     soft.stiffen(touching, or(eq(v(imA), f(0)), eq(v(imB), f(0))), params);
                     LocalVar[] n = new LocalVar[3];
@@ -103,14 +109,36 @@ public final class BoxPairs {
                                     load3(present, manifold, where, BoxContact.ANCHOR_FIRST));
                             LocalVar[] rB = Boxes.rotate(present, second.q,
                                     load3(present, manifold, where, BoxContact.ANCHOR_SECOND));
+                            // A sphere's point is its radius along the normal, whatever its turn: an anchor that turned with a
+                            // rolling ball would leave the surface within the step.
+                            present.when(first.isSphere(), round -> {
+                                for (int a = 0; a < 3; a++) {
+                                    round.set(rA[a], mul(v(first.half[0]), v(n[a])));
+                                }
+                            });
+                            present.when(second.isSphere(), round -> {
+                                for (int a = 0; a < 3; a++) {
+                                    round.set(rB[a], neg(mul(v(second.half[0]), v(n[a]))));
+                                }
+                            });
                             Expr gap = add(add(
                                     mul(sub(add(v(second.at[0]), v(rB[0])), add(v(first.at[0]), v(rA[0]))), v(n[0])),
                                     mul(sub(add(v(second.at[1]), v(rB[1])), add(v(first.at[1]), v(rA[1]))), v(n[1]))),
                                     mul(sub(add(v(second.at[2]), v(rB[2])), add(v(first.at[2]), v(rA[2]))), v(n[2])));
-                            LocalVar normalAt = present.let("normalAt", add(v(held), i(4 * slot)));
+                            LocalVar normalAt = present.let("normalAt", add(v(held), i(POINT_IMPULSE * slot)));
                             LocalVar tangentAt = present.let("tangentAt", add(v(normalAt), i(1)));
                             Boxes.contact(present, sweep, present.let("gap", gap), n, first, rA, second, rB,
                                     impulses, normalAt, impulses, tangentAt, soft);
+                            present.when(or(first.isSphere(), second.isSphere()), round -> {
+                                // The radius rolling resists by: the sphere's, or for two, rA rB / (rA + rB).
+                                LocalVar radius = round.let("radius", v(second.half[0]));
+                                round.when(first.isSphere(), firstRound -> firstRound.set(radius, v(first.half[0])));
+                                round.when(Body.and(first.isSphere(), second.isSphere()), both -> both.set(radius,
+                                        div(mul(v(first.half[0]), v(second.half[0])), add(v(first.half[0]),
+                                                v(second.half[0])))));
+                                Boxes.roll(round, sweep, first, second, radius, impulses, normalAt, impulses,
+                                        round.let("rollAt", add(v(normalAt), i(4))), params);
+                            });
                         });
                     }
                     first.store(touching, velocity, spin);
@@ -193,8 +221,8 @@ public final class BoxPairs {
             LocalVar reach = t.let("reach", mul(mul(f(SAME_POINT), v(smallest)), mul(f(SAME_POINT), v(smallest))));
             for (int point = 0; point < BoxContact.MOST_POINTS; point++) {
                 int slot = point;
-                LocalVar[] taken = new LocalVar[4];
-                for (int w = 0; w < 4; w++) {
+                LocalVar[] taken = new LocalVar[POINT_IMPULSE];
+                for (int w = 0; w < POINT_IMPULSE; w++) {
                     taken[w] = t.let("taken", f(0));
                 }
                 t.when(lt(i(slot), v(count)), present -> {
@@ -213,15 +241,25 @@ public final class BoxPairs {
                             LocalVar d2 = earlier.let("d2", dot(gap, gap));
                             earlier.when(lt(v(d2), v(nearest)), nearer -> {
                                 nearer.set(nearest, v(d2));
-                                for (int w = 0; w < 4; w++) {
-                                    nearer.set(taken[w], load(impulsesWas, add(v(heldWas), i(4 * oldSlot + w))));
+                                for (int w = 0; w < POINT_IMPULSE; w++) {
+                                    nearer.set(taken[w], load(impulsesWas, add(v(heldWas), i(POINT_IMPULSE * oldSlot
+                                            + w))));
                                 }
                             });
                         });
                     }
                 });
-                for (int w = 0; w < 4; w++) {
-                    t.store(impulses, add(v(held), i(4 * slot + w)), v(taken[w]));
+                if (slot == 0) {
+                    // One point then and one now: the same contact, whatever its anchors did. A rolling sphere's anchor
+                    // turns with it, and would match nothing.
+                    t.when(and(eq(v(count), i(1)), eq(v(before), i(1))), single -> {
+                        for (int w = 0; w < POINT_IMPULSE; w++) {
+                            single.set(taken[w], load(impulsesWas, add(v(heldWas), i(w))));
+                        }
+                    });
+                }
+                for (int w = 0; w < POINT_IMPULSE; w++) {
+                    t.store(impulses, add(v(held), i(POINT_IMPULSE * slot + w)), v(taken[w]));
                 }
             }
         });

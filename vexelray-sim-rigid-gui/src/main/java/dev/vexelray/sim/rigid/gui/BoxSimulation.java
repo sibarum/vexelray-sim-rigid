@@ -69,12 +69,13 @@ public final class BoxSimulation implements RigidSimulation {
     }
 
     /**
-     * Starts from this state, each array as long as the box count: centres, velocities, angular velocities in the
-     * world's frame, orientations ({@code qx, qy, qz, qw}), half-extents ({@code hx, hy, hz}) and inverse masses. The
-     * angular velocities are written as the angular momentum they make, which is what a box keeps.
+     * Starts from this state, each array as long as the body count: centres, velocities, angular velocities in the
+     * world's frame, orientations ({@code qx, qy, qz, qw}), half-extents ({@code hx, hy, hz}), shapes
+     * ({@code Boxes.BOX_SHAPE} or {@code SPHERE_SHAPE}, a sphere's radius in all three half-extents) and inverse
+     * masses. The angular velocities are written as the angular momentum they make, which is what a body keeps.
      */
     public void start(float[] x, float[] y, float[] z, float[] u, float[] v, float[] w, float[][] spin, float[][] q,
-                      float[][] half, float[] im, int[] params) {
+                      float[][] half, float[] shape, float[] im, int[] params) {
         runner.clear();
         step.constants().forEach(runner::write);
         float[][] momentum = new float[3][step.boxes];
@@ -84,7 +85,7 @@ public final class BoxSimulation implements RigidSimulation {
             }
             double[] l = BoxDiagnostics.momentum(new double[] {spin[0][s], spin[1][s], spin[2][s]},
                     new double[] {q[0][s], q[1][s], q[2][s], q[3][s]},
-                    Boxes.inertia(1 / im[s], half[0][s], half[1][s], half[2][s]));
+                    Boxes.inertia(shape[s], 1 / im[s], half[0][s], half[1][s], half[2][s]));
             for (int a = 0; a < 3; a++) {
                 momentum[a][s] = (float) l[a];
             }
@@ -101,8 +102,9 @@ public final class BoxSimulation implements RigidSimulation {
             runner.write(turn[k], q[k]);
         }
         runner.write("im", im);
+        runner.write("shape", shape);
         runner.write("params", params);
-        runner.write("shown", Boxes.shownAtStart(x, y, z, q, half));
+        runner.write("shown", Boxes.shownAtStart(x, y, z, q, half, shape));
     }
 
     /** New parameters ({@link Boxes#params}), from the next step on. */

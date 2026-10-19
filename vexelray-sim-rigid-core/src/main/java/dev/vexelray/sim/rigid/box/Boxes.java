@@ -13,6 +13,7 @@ import java.util.List;
 
 import static dev.supirvast.vastir.build.Body.F32;
 import static dev.supirvast.vastir.build.Body.add;
+import static dev.supirvast.vastir.build.Body.and;
 import static dev.supirvast.vastir.build.Body.div;
 import static dev.supirvast.vastir.build.Body.f;
 import static dev.supirvast.vastir.build.Body.gt;
@@ -95,9 +96,9 @@ public final class Boxes {
 
     /**
      * {@code [h, gx, gy, gz, sx, sy, sz, muStatic, muKinetic, margin, bias, massScale, impulseScale, staticBias,
-     * staticMassScale, staticImpulseScale, push]}, see {@link #params}.
+     * staticMassScale, staticImpulseScale, push, muRolling]}, see {@link #params}.
      */
-    public static final int PARAM_COUNT = 17;
+    public static final int PARAM_COUNT = 18;
 
     static final int H = 0;
     static final int GX = 1;
@@ -118,6 +119,7 @@ public final class Boxes {
     static final int STATIC_MASS_SCALE = 14;
     static final int STATIC_IMPULSE_SCALE = 15;
     static final int PUSH_SPEED = 16;
+    static final int MU_ROLLING = 17;
 
     /**
      * A contact's stiffness, in hertz, held to a quarter of the substep rate as Box2D holds it. Box2D's default is 30,
@@ -141,10 +143,18 @@ public final class Boxes {
     public static final int LAMBDA_WORDS = WALLS * CORNERS;
     /** Words a box keeps in {@code rub}: each corner's tangential impulse against each wall. */
     public static final int RUB_WORDS = 3 * LAMBDA_WORDS;
+    /** Words a body keeps in {@code roll}: a sphere's rolling impulse against each wall, where its tangential would be. */
+    public static final int ROLL_WORDS = RUB_WORDS;
 
     /** Every per-box field, in the order {@link BoxStep} holds them. */
     static final String[] BOX = {"x", "y", "z", "u", "v", "w", "lx", "ly", "lz", "qx", "qy", "qz", "qw", "im", "hx",
-            "hy", "hz"};
+            "hy", "hz", "shape"};
+
+    /** A body's {@code shape}: a box, its half-extents {@code hx, hy, hz}; or a sphere, its radius in all three. */
+    public static final float BOX_SHAPE = 0;
+    public static final float SPHERE_SHAPE = 1;
+    /** A solid sphere's moment of inertia, as a share of {@code m r²}. */
+    public static final double SPHERE_INERTIA = 0.4;
 
     /** What a sweep over the contacts does. */
     public enum Sweep {
@@ -189,6 +199,21 @@ public final class Boxes {
      */
     public static int[] params(double h, double gx, double gy, double gz, double sx, double sy, double sz,
                                double muStatic, double muKinetic, double margin) {
+        return params(h, gx, gy, gz, sx, sy, sz, muStatic, muKinetic, margin, 0);
+    }
+
+    /**
+     * As above, with rolling resistance, which a contact with a sphere in it applies ({@link #roll}).
+     *
+     * @param muRolling how much a sphere's contact resists the two bodies turning against each other, rolling or
+     *                  twisting: an angular impulse of at most this times the normal impulse and the radius; 0, the
+     *                  default, for none
+     */
+    public static int[] params(double h, double gx, double gy, double gz, double sx, double sy, double sz,
+                               double muStatic, double muKinetic, double margin, double muRolling) {
+        if (!(muRolling >= 0) || Double.isInfinite(muRolling)) {
+            throw new IllegalArgumentException("rolling resistance is finite and at least 0, got " + muRolling);
+        }
         if (!(margin >= 0) || Double.isInfinite(margin)) {
             throw new IllegalArgumentException("a margin is finite and at least 0, got " + margin);
         }
@@ -205,7 +230,7 @@ public final class Boxes {
         double[] stiff = softness(2 * hertz, DAMPING_RATIO, h);
         return new int[] {bits(h), bits(gx), bits(gy), bits(gz), bits(sx), bits(sy), bits(sz), bits(muStatic),
                 bits(muKinetic), bits(margin), bits(soft[0]), bits(soft[1]), bits(soft[2]), bits(stiff[0]),
-                bits(stiff[1]), bits(stiff[2]), bits(PUSH)};
+                bits(stiff[1]), bits(stiff[2]), bits(PUSH), bits(muRolling)};
     }
 
     /**
@@ -233,6 +258,15 @@ public final class Boxes {
         return new double[] {m * (hy * hy + hz * hz) / 3, m * (hx * hx + hz * hz) / 3, m * (hx * hx + hy * hy) / 3};
     }
 
+    /** A body's principal moments, by its shape: a box's as above, a sphere's {@code ⅖ m r²}, its radius {@code hx}. */
+    public static double[] inertia(float shape, double m, double hx, double hy, double hz) {
+        if (shape > 0.5f) {
+            double moment = SPHERE_INERTIA * m * hx * hx;
+            return new double[] {moment, moment, moment};
+        }
+        return inertia(m, hx, hy, hz);
+    }
+
     // --- moving the boxes ----------------------------------------------------------------------------------
 
     static final String[] VELOCITIES_NAMES = {"u", "v", "w", "im", "params"};
@@ -255,7 +289,7 @@ public final class Boxes {
     }
 
     static final String[] POSITIONS_NAMES = {"x", "y", "z", "u", "v", "w", "im", "params", "lx", "ly", "lz", "qx",
-            "qy", "qz", "qw", "hx", "hy", "hz"};
+            "qy", "qz", "qw", "hx", "hy", "hz", "shape"};
     static final List<Buffer> POSITIONS_BUFFERS = bind(POSITIONS_NAMES);
 
     /**
@@ -289,7 +323,7 @@ public final class Boxes {
                 for (int a = 0; a < 3; a++) {
                     momentum[a] = free.let("momentum", load(spin[a], v(s)));
                 }
-                LocalVar[] inverse = inverseInertia(free, half, s, inverseMass);
+                LocalVar[] inverse = inverseInertia(free, half, bs.get(18), s, inverseMass);
 
                 // The angular velocity now, half a substep's turn by it, the angular velocity there, and the whole
                 // turn by that.
@@ -310,7 +344,7 @@ public final class Boxes {
     // --- the walls -----------------------------------------------------------------------------------------
 
     static final String[] WALLS_NAMES = {"x", "y", "z", "qx", "qy", "qz", "qw", "im", "hx", "hy", "hz", "params", "u",
-            "v", "w", "lx", "ly", "lz", "lambda", "rub"};
+            "v", "w", "lx", "ly", "lz", "lambda", "rub", "shape", "roll"};
     static final List<Buffer> WALLS_BUFFERS = bind(WALLS_NAMES);
 
     /**
@@ -331,6 +365,8 @@ public final class Boxes {
         Buffer[] spin = {bs.get(15), bs.get(16), bs.get(17)};
         Buffer lambda = bs.get(18);
         Buffer rub = bs.get(19);
+        Buffer shape = bs.get(20);
+        Buffer rolls = bs.get(21);
         int[] extentParam = {SX, SY, SZ};
 
         Body b = new Body();
@@ -338,7 +374,7 @@ public final class Boxes {
         b.when(lt(v(s), new Expr.InvocationCount()), t -> {
             LocalVar inverseMass = t.let("im", load(im, v(s)));
             t.when(gt(v(inverseMass), f(0)), free -> {
-                Moving box = new Moving(free, s, inverseMass, atBuffer, turnBuffer, half, velocity, spin);
+                Moving box = new Moving(free, s, inverseMass, atBuffer, turnBuffer, half, velocity, spin, shape);
                 Soft soft = new Soft(free, params, true);
                 LocalVar base = free.let("base", mul(v(s), i(LAMBDA_WORDS)));
                 LocalVar[] extent = new LocalVar[3];
@@ -351,13 +387,26 @@ public final class Boxes {
                     boolean high = wall % 2 == 1;
                     int firstSlot = wall * CORNERS;
                     LocalVar[] n = box.normal(free, axis, high);
-                    box.eachCorner(free, reverse, (corner, c, offset, r) -> {
+                    // A sphere: one contact, its point nearest the wall, its offset the radius against the normal.
+                    free.when(box.isSphere(), round -> {
+                        LocalVar[] r = new LocalVar[3];
+                        for (int a = 0; a < 3; a++) {
+                            r[a] = round.let("r", neg(mul(v(box.half[0]), v(n[a]))));
+                        }
+                        LocalVar at = round.let("at", add(v(base), i(firstSlot)));
+                        LocalVar tangentAt = round.let("tangentAt", mul(v(at), i(3)));
+                        LocalVar reach = round.let("reach", add(v(box.at[axis]), v(r[axis])));
+                        LocalVar gap = round.let("gap", high ? sub(v(extent[axis]), v(reach)) : v(reach));
+                        contact(round, sweep, gap, n, null, null, box, r, lambda, at, rub, tangentAt, soft);
+                        roll(round, sweep, null, box, box.half[0], lambda, at, rolls, tangentAt, params);
+                    });
+                    free.when(not(box.isSphere()), boxed -> box.eachCorner(boxed, reverse, (corner, c, offset, r) -> {
                         LocalVar at = corner.let("at", add(v(base), add(i(firstSlot), v(c))));
                         LocalVar tangentAt = corner.let("tangentAt", mul(v(at), i(3)));
                         LocalVar reach = corner.let("reach", add(v(box.at[axis]), v(r[axis])));
                         LocalVar gap = corner.let("gap", high ? sub(v(extent[axis]), v(reach)) : v(reach));
                         contact(corner, sweep, gap, n, null, null, box, r, lambda, at, rub, tangentAt, soft);
-                    });
+                    }));
                 }
                 box.store(free, velocity, spin);
             });
@@ -492,6 +541,76 @@ public final class Boxes {
         });
     }
 
+    /**
+     * Rolling resistance at one contact with a sphere in it, after {@link #contact} has solved the contact this
+     * sweep: an angular impulse against the two bodies turning against each other, {@code ωB − ωA} (a wall turns not
+     * at all), rolling and twisting alike, as the spheres' own {@code Spheres.roll} is. Accumulated in
+     * {@code rolls[rollAt]} on, warm started, and the whole held to {@code μr R λₙ}, {@code R} the sphere's radius,
+     * or {@code rA rB / (rA + rB)} for two, and {@code λₙ} the contact's normal impulse now. A torque of at most
+     * {@code μr R N} with no spring: a ball stops and stays, rather than rocking back. Without it a sphere rolls on
+     * forever, as the spheres found: friction holds the contact point still, and a rolling ball's is still.
+     */
+    static void roll(Body b, Sweep sweep, Moving first, Moving second, LocalVar radius, Buffer normals,
+                     LocalVar normalAt, Buffer rolls, LocalVar rollAt, Buffer params) {
+        LocalVar[] old = new LocalVar[3];
+        for (int a = 0; a < 3; a++) {
+            old[a] = b.let("rollOld", load(rolls, add(v(rollAt), i(a))));
+        }
+        if (sweep == Sweep.WARM) {
+            applyAngular(b, first, second, old);
+            return;
+        }
+        LocalVar muRolling = b.let("muR", load(params, i(MU_ROLLING)));
+        LocalVar[] whole = new LocalVar[3];
+        LocalVar[] turning = new LocalVar[3];
+        for (int a = 0; a < 3; a++) {
+            whole[a] = b.let("rollWhole", v(old[a]));
+            Expr against = first == null ? f(0) : v(first.omega[a]);
+            turning[a] = b.let("turning", sub(v(second.omega[a]), against));
+        }
+        LocalVar speed = b.let("turnSpeed", sqrt(dot(turning, turning)));
+        b.when(and(gt(v(speed), f(1e-12f)), gt(v(muRolling), f(0))), turns -> {
+            LocalVar[] t = new LocalVar[3];
+            for (int a = 0; a < 3; a++) {
+                t[a] = turns.let("t", div(v(turning[a]), v(speed)));
+            }
+            Expr k = dot(t, second.inverseInertiaTimes(turns, t));
+            if (first != null) {
+                k = add(k, dot(t, first.inverseInertiaTimes(turns, t)));
+            }
+            LocalVar stop = turns.let("stopTurn", div(v(speed), k));
+            for (int a = 0; a < 3; a++) {
+                turns.set(whole[a], sub(v(whole[a]), mul(v(stop), v(t[a]))));
+            }
+        });
+        LocalVar most = b.let("mostRoll", mul(mul(v(muRolling), v(radius)), max(f(0), load(normals, v(normalAt)))));
+        LocalVar size = b.let("rollSize", sqrt(dot(whole, whole)));
+        b.when(gt(v(size), v(most)), cut -> {
+            LocalVar scale = cut.let("rollCut", div(v(most), v(size)));
+            for (int a = 0; a < 3; a++) {
+                cut.set(whole[a], mul(v(whole[a]), v(scale)));
+            }
+        });
+        LocalVar[] change = new LocalVar[3];
+        for (int a = 0; a < 3; a++) {
+            b.store(rolls, add(v(rollAt), i(a)), v(whole[a]));
+            change[a] = b.let("rollChange", sub(v(whole[a]), v(old[a])));
+        }
+        applyAngular(b, first, second, change);
+    }
+
+    /** The angular impulse {@code j} on the second, and against the first. */
+    private static void applyAngular(Body b, Moving first, Moving second, LocalVar[] j) {
+        second.turn(b, j);
+        if (first != null) {
+            LocalVar[] back = new LocalVar[3];
+            for (int a = 0; a < 3; a++) {
+                back[a] = b.let("back", neg(v(j[a])));
+            }
+            first.turn(b, back);
+        }
+    }
+
     /** The second's point's velocity less the first's, or less nothing at a wall. */
     private static LocalVar[] relative(Body b, Moving first, LocalVar[] rA, Moving second, LocalVar[] rB) {
         LocalVar[] vb = second.pointVelocity(b, rB);
@@ -540,6 +659,8 @@ public final class Boxes {
      */
     static final class Moving {
         final LocalVar s;
+        /** The body's shape, {@link Boxes#BOX_SHAPE} or {@link Boxes#SPHERE_SHAPE}, its radius then {@code half[0]}. */
+        final LocalVar shape;
         final LocalVar inverseMass;
         final LocalVar[] at = new LocalVar[3];
         final LocalVar[] q = new LocalVar[4];
@@ -550,9 +671,10 @@ public final class Boxes {
         final LocalVar[] omega;
 
         Moving(Body b, LocalVar s, LocalVar inverseMass, Buffer[] atBuffer, Buffer[] turnBuffer, Buffer[] halfBuffer,
-               Buffer[] velocityBuffer, Buffer[] spinBuffer) {
+               Buffer[] velocityBuffer, Buffer[] spinBuffer, Buffer shapeBuffer) {
             this.s = s;
             this.inverseMass = inverseMass;
+            this.shape = b.let("shape", load(shapeBuffer, v(s)));
             for (int a = 0; a < 3; a++) {
                 at[a] = b.let("at", load(atBuffer[a], v(s)));
                 half[a] = b.let("half", load(halfBuffer[a], v(s)));
@@ -562,8 +684,13 @@ public final class Boxes {
             for (int k = 0; k < 4; k++) {
                 q[k] = b.let("q", load(turnBuffer[k], v(s)));
             }
-            inverse = inverseInertia(b, halfBuffer, s, inverseMass);
+            inverse = inverseInertia(b, halfBuffer, shapeBuffer, s, inverseMass);
             omega = inverseInertiaTimes(b, momentum);
+        }
+
+        /** Whether the body is a sphere. */
+        Expr isSphere() {
+            return gt(v(shape), f(0.5f));
         }
 
         /** The unit normal of a wall, pointing inside: {@code +e_axis} for the low wall, {@code −e_axis} for the high. */
@@ -627,6 +754,15 @@ public final class Boxes {
             }
         }
 
+        /** The angular impulse {@code j}: {@code L += j}, {@code ω += I⁻¹ j}. */
+        void turn(Body b, LocalVar[] j) {
+            LocalVar[] spin = inverseInertiaTimes(b, j);
+            for (int a = 0; a < 3; a++) {
+                b.set(momentum[a], add(v(momentum[a]), v(j[a])));
+                b.set(omega[a], add(v(omega[a]), v(spin[a])));
+            }
+        }
+
         /** The velocity and angular momentum stored back, once. */
         void store(Body b, Buffer[] velocityBuffer, Buffer[] spinBuffer) {
             for (int a = 0; a < 3; a++) {
@@ -646,13 +782,15 @@ public final class Boxes {
     /** Where in a box's {@code shown} its centre before the step starts, and after it. */
     public static final int CENTRE_BEFORE = 0;
     public static final int CENTRE_AFTER = 4;
+    /** Where its shape is, {@link #BOX_SHAPE} or {@link #SPHERE_SHAPE}: the centre before's spare word. */
+    public static final int SHAPE = 3;
     /** Where its half-extents are. */
     public static final int HALF = 8;
     /** Where its orientation before the step starts, and after it. */
     public static final int TURNED_BEFORE = 12;
     public static final int TURNED_AFTER = 16;
 
-    static final String[] SHOW_NAMES = {"x", "y", "z", "qx", "qy", "qz", "qw", "hx", "hy", "hz", "shown"};
+    static final String[] SHOW_NAMES = {"x", "y", "z", "qx", "qy", "qz", "qw", "hx", "hy", "hz", "shown", "shape"};
     static final List<Buffer> SHOW_BUFFERS = bind(SHOW_NAMES);
 
     /**
@@ -676,6 +814,7 @@ public final class Boxes {
                 t.store(shown, add(v(base), i(TURNED_BEFORE + k)), load(shown, add(v(base), i(TURNED_AFTER + k))));
                 t.store(shown, add(v(base), i(TURNED_AFTER + k)), load(bs.get(3 + k), v(s)));
             }
+            t.store(shown, add(v(base), i(SHAPE)), load(bs.get(11), v(s)));
         });
         return function("boxesShow", b);
     }
@@ -685,7 +824,7 @@ public final class Boxes {
      * so the first frame does not blend from nowhere. {@code q} is {@code qx, qy, qz, qw}, {@code half}
      * {@code hx, hy, hz}.
      */
-    public static float[] shownAtStart(float[] x, float[] y, float[] z, float[][] q, float[][] half) {
+    public static float[] shownAtStart(float[] x, float[] y, float[] z, float[][] q, float[][] half, float[] shape) {
         float[] shown = new float[SHOWN_STRIDE * x.length];
         float[][] at = {x, y, z};
         for (int s = 0; s < x.length; s++) {
@@ -694,6 +833,7 @@ public final class Boxes {
                 shown[base + CENTRE_BEFORE + a] = shown[base + CENTRE_AFTER + a] = at[a][s];
                 shown[base + HALF + a] = half[a][s];
             }
+            shown[base + SHAPE] = shape[s];
             for (int k = 0; k < 4; k++) {
                 shown[base + TURNED_BEFORE + k] = shown[base + TURNED_AFTER + k] = q[k][s];
             }
@@ -707,8 +847,11 @@ public final class Boxes {
         return add(add(mul(v(a[0]), v(b[0])), mul(v(a[1]), v(b[1]))), mul(v(a[2]), v(b[2])));
     }
 
-    /** Box {@code s}'s inverse principal moments, {@code 3 im / (hy² + hz²)} and the like. */
-    private static LocalVar[] inverseInertia(Body b, Buffer[] half, LocalVar s, LocalVar inverseMass) {
+    /**
+     * Body {@code s}'s inverse principal moments: a box's {@code 3 im / (hy² + hz²)} and the like; a sphere's, its
+     * radius in {@code hx}, {@code im / (⅖ r²)} about every axis.
+     */
+    static LocalVar[] inverseInertia(Body b, Buffer[] half, Buffer shape, LocalVar s, LocalVar inverseMass) {
         LocalVar[] h2 = new LocalVar[3];
         for (int a = 0; a < 3; a++) {
             LocalVar e = b.let("e", load(half[a], v(s)));
@@ -719,6 +862,11 @@ public final class Boxes {
             Expr across = add(v(h2[(a + 1) % 3]), v(h2[(a + 2) % 3]));
             inverse[a] = b.let("inverse", div(mul(f(3), v(inverseMass)), across));
         }
+        b.when(gt(load(shape, v(s)), f(0.5f)), round -> {
+            for (int a = 0; a < 3; a++) {
+                round.set(inverse[a], div(v(inverseMass), mul(f((float) SPHERE_INERTIA), v(h2[0]))));
+            }
+        });
         return inverse;
     }
 
