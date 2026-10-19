@@ -91,8 +91,8 @@ enum Scenario {
     },
 
     DROPPED_BOXES("Dropped boxes", "Six boxes of different shapes, each turned and dropped onto a corner."
-            + " Each settles onto a face; with friction they stop where they land. They do not meet each other yet:"
-            + " only the walls. Boxes take only the substeps and friction controls.") {
+            + " Each settles onto a face; with friction they stop where they land. Boxes take only the substeps and"
+            + " friction controls.") {
         @Override
         State start() {
             double[][] halves = {{0.05, 0.05, 0.05}, {0.04, 0.08, 0.12}, {0.1, 0.03, 0.06}, {0.03, 0.12, 0.03},
@@ -103,6 +103,24 @@ enum Scenario {
                 double[] axis = {random.nextDouble() - 0.5, random.nextDouble() - 0.5, random.nextDouble() - 0.5};
                 s.box(k, 0.2 + 0.28 * k, 0.4 + 0.08 * k, 0.3, halves[k][0], halves[k][1], halves[k][2], 0.5,
                         axisAngle(axis, 0.6 + 0.3 * k), new double[3]);
+            }
+            return s;
+        }
+    },
+
+    PYRAMID("Pyramid of 55", "Cubes of 10 cm, ten at the base, each row set half a cube along on the one below."
+            + " Every pair of cubes is tested each step, and the touching ones are solved in rounds that share no"
+            + " cube. Boxes take only the substeps and friction controls.") {
+        @Override
+        State start() {
+            int base = 10;
+            State s = State.boxes(base * (base + 1) / 2, 1.6, 1.4, 0.5, -9.81);
+            int k = 0;
+            for (int row = 0; row < base; row++) {
+                for (int c = 0; c < base - row; c++, k++) {
+                    s.box(k, 0.3 + 0.1005 * (c + row / 2.0), 0.05 + 0.1 * row, 0.25, 0.05, 0.05, 0.05, 1, IDENTITY,
+                            new double[3]);
+                }
             }
             return s;
         }
@@ -122,7 +140,7 @@ enum Scenario {
 
     /** Whether its bodies are boxes, which take only the substeps and friction controls. */
     boolean boxes() {
-        return this == SPINNING_BOX || this == DROPPED_BOXES;
+        return this == SPINNING_BOX || this == DROPPED_BOXES || this == PYRAMID;
     }
 
     /** A cube of {@code side³} spheres, loosely spaced and jittered, above the floor of a square box. */

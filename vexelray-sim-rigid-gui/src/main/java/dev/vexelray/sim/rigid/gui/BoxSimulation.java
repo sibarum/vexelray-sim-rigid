@@ -7,6 +7,7 @@ import dev.supirvast.vastir.tools.PassRunner;
 import dev.supirvast.vastir.tools.ResidentBuffer;
 import dev.vexelray.sim.rigid.box.BoxDiagnostics;
 import dev.vexelray.sim.rigid.box.BoxStep;
+import dev.vexelray.sim.rigid.box.BoxStepper;
 import dev.vexelray.sim.rigid.box.Boxes;
 import dev.vexelray.sim.rigid.sphere.SphereStepper;
 
@@ -26,6 +27,8 @@ public final class BoxSimulation implements RigidSimulation {
     private final Accelerator accelerator;
     private final BoxStep step;
     private final PassRunner runner;
+    private final BoxStepper stepper;
+    private BoxStepper.Report last = new BoxStepper.Report(0, 0, 0, 0);
 
     /** {@code step} on {@code context}, or on a device of its own if that is null. */
     public BoxSimulation(GpuContext context, BoxStep step) {
@@ -42,7 +45,8 @@ public final class BoxSimulation implements RigidSimulation {
         this.step = step;
         this.runner = accelerator == null ? PassRunner.cpu(step, Boxes.WORKGROUP, PassRunner.NO_SUBGROUP)
                 : PassRunner.gpu(accelerator, step, Boxes.WORKGROUP, PassRunner.NO_SUBGROUP);
-        runner.prepare(step.step());
+        this.stepper = new BoxStepper(step);
+        runner.prepare(step.step(0));
     }
 
     @Override
@@ -109,9 +113,35 @@ public final class BoxSimulation implements RigidSimulation {
     @Override
     public SphereSimulation.StepReport stepAndWait() {
         long start = System.nanoTime();
-        Completion done = runner.run(step.step());
+        Completion[] done = new Completion[1];
+        int[] submissions = new int[1];
+        last = stepper.step(new BoxStepper.Runner() {
+            @Override
+            public void run(java.util.List<dev.supirvast.vastir.pass.Pass> passes) {
+                done[0] = runner.run(passes);
+                submissions[0]++;
+            }
+
+            @Override
+            public float[] runAndRead(java.util.List<dev.supirvast.vastir.pass.Pass> passes, String buffer) {
+                run(passes);
+                done[0].await();
+                return runner.floats(buffer);
+            }
+
+            @Override
+            public void write(String buffer, int[] values) {
+                runner.write(buffer, values);
+            }
+        });
         runner.finish();
-        return new SphereSimulation.StepReport(SOLVED, 1, System.nanoTime() - start, done.gpuNanos().orElse(0));
+        return new SphereSimulation.StepReport(SOLVED, submissions[0], System.nanoTime() - start,
+                done[0].gpuNanos().orElse(0));
+    }
+
+    /** What the last step took: the touching pairs, their points, and the rounds they were sorted into. */
+    public BoxStepper.Report last() {
+        return last;
     }
 
     /**

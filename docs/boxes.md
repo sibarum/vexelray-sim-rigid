@@ -1,6 +1,6 @@
 # Boxes: a contact manifold, and stacking measured
 
-Planned on 2026-10-19. Stages 1 to 4 are built; the rest is not yet. The plan follows the sphere work: each stage is
+Planned on 2026-10-19. Stages 1 to 5 are built; the rest is not yet. The plan follows the sphere work: each stage is
 built far enough to be measured against a known answer, and records what it found under its own heading. Where a
 measurement changes the plan, the stage says how.
 
@@ -42,7 +42,8 @@ would put a resting box's four points into four separate rounds, for no gain, si
 **Positional contact and Coulomb friction as the spheres have them.** At each point the normal correction uses the
 generalised inverse mass `w = 1/m + (r × n)ᵀ I⁻¹ (r × n)`, with `I⁻¹` turned into the world frame,
 `R I_body⁻¹ Rᵀ`. Friction is the same clamp as the spheres' at `μ λₙ`, and restitution the same velocity pass. A box
-needs no rolling resistance: its faces stop it.
+needs no rolling resistance: its faces stop it. *Changed in stage 5: positional contact would not stack, and boxes now
+use Box2D v3's soft step, at the level of velocities, walls and pairs alike.*
 
 **The angular momentum is the state.** With nothing touching a box, its angular momentum in the world's frame stays
 the same, while its angular velocity follows the body round. Keeping `L` and working out `ω` from it turns a free box
@@ -99,6 +100,9 @@ The flip is a sharp test. The nudge leaves the spin 8e-5 of `M²` from the separ
 logarithm of that distance. With the predict that drifted by 1e-4 in energy, the flips were 1–2% off.
 
 ### 2. A box against the walls — built, measured (2026-10-19)
+
+*This stage was built as a positional solve, recorded as it was below. Stage 5 replaced it with the soft step, which
+passes the same tests better; the findings here about friction stand.*
 
 `Boxes.walls` and `Boxes.velocity`, after `predict` in each substep. One invocation per box. Each of its eight
 corners is a contact with each of the six walls, found every substep: a corner is already an anchor in the box's
@@ -253,6 +257,85 @@ The measures, each judged the way the column of spheres is: overlap as a share o
 | **Harmonic overhang** | blocks of length `L`, each stuck out `L / 2k` past the one below. It stands at 0.95 of that and falls at 1.05. This tests torque and the manifold's spread exactly: a manifold that lost points would tip early |
 | Pyramid of 10 at the base | stands; overlap and energy as for the column |
 | A wall of bricks, half-offset | stands; struck by a box, it is pushed rather than exploding |
+
+**Built, measured (2026-10-19), as Box2D v3's soft step, after XPBD would not stack.** What is built:
+
+- `BoxStepper` runs a step:
+  - it collides every pair once (`keep`, `collide`, `carry`);
+  - it reads the manifolds back and sorts the touching pairs on the host into rounds of pairs sharing no box: a greedy
+    colouring, two rounds for a column and six for the pyramid, at one wait a step;
+  - it runs the substeps with that many rounds.
+
+  Every pair is in the list; the broad phase is stage 6.
+- Each substep, as Box2D v3 does it:
+  - gravity into the velocities;
+  - a warm start, applying every contact's impulse from before;
+  - the solve;
+  - positions integrated (the turn from `L`, as stage 1 made it);
+  - a relax: the solve again with no bias where surfaces overlap, which takes out the push-apart velocity.
+
+  Each sweep runs every round of pairs (`BoxPairs.solve`, a pair's whole manifold in turn), then the walls
+  (`Boxes.walls`, every corner against every wall). Pairs and walls share one contact routine, `Boxes.contact`.
+- A contact's normal impulse drives its closing speed toward a bias:
+  - apart by `s > 0`: `s / h`, so a gap closes within the substep and no further (speculative);
+  - overlapping: the soft constraint's `max(β s, −3 m/s)`, with its mass and impulse scales. The 3 m/s cap is the
+    depenetration speed limit, Box2D's default.
+- Friction is a velocity impulse against sliding, accumulated as a vector, clamped to `μs λₙ` (or cut to `μk λₙ`).
+- Impulses carry from substep to substep and step to step: a wall's corners are fixed, and a pair's points are
+  matched to the last step's by anchor. A warm start at the level of velocities carries the load alone.
+
+**Two things changed from Box2D's defaults, both measured.**
+
+- **The stiffness: 150 Hz, held to a quarter of the substep rate, not 30.** A soft contact is a spring, and a column
+  on springs is an inverted pendulum: it stands while the springs resist rocking more than the column's weight
+  pushes it over. That resistance falls with the square of the bodies' width, and Box2D's 30 Hz is tuned for bodies
+  of a metre. For 10 cm cubes it comes to about 90 N·m/rad; ten cubes push over with about 40 and twenty with
+  about 180. At 30 Hz, ten sank 5 mm at the foot and fell; at 60 Hz, 1.2 mm; at 150 Hz, 0.2 mm, and they rest.
+  The overlap goes as the inverse square of the stiffness, as a spring's does.
+- **Four sweeps of each a substep, not one.** At 150 Hz one sweep left ten cubes moving at 1e-4 J; four bring them
+  to rest.
+
+`BoxStackTest`, both backends, 10 substeps, friction 0.5:
+
+| Scene | Known answer | Measured |
+| --- | --- | --- |
+| Two cubes head on at 1 m/s each | momentum kept; inelastic | momentum 0 exactly; touching, 4e-5 m/s |
+| Column of 10 cubes | rests: top within 1 mm, under 1e-6 J | 0.2 mm, 2e-10 J, overlap 0.4% of a half |
+| Column of 20 cubes | rests | stands, but sways: 9–12 mm, 1e-6 J at 3 s (see below) |
+| Harmonic overhang, 6 blocks, 0.95 | stands | drops 1.5 mm (the top tilts onto its edge), slides 0.4 mm, 4e-11 J |
+| Harmonic overhang, 1.05 | falls | a block drops 17.5 cm |
+| Pyramid of 55, ten at the base | stands | no cube moves 0.3 mm; 3e-11 J; 6 rounds, 540 points |
+
+The walls on the soft step pass stage 2's tests better than the positional solve did. A box dropped flat is still to
+1e-17 J and sits 4 µm in. On the 20° slope it settles 1e-7 m and does not creep. The tall box is still at 12° and
+falls at 16°, and the slide is `g (sin θ − μ cos θ)` to four digits. The pyramid on the CPU takes 470 ms a step, so
+it runs only with `-Pphysics`.
+
+**What does not hold yet: twenty cubes do not quite rest.** They stand, but sway on their soft contacts, the top
+going a couple of millimetres back and forth over seconds, at 1e-5 J. Placing them exactly touching, rather than
+dropped 1 mm, and symmetric sweeps change little; more sweeps and substeps trim it. It is the column's rocking mode,
+damped slowly by contacts stiff enough to stand but soft enough to give.
+
+**What came first: the positional solve, and why it was left.** XPBD with the manifolds kept through the step was
+built first, and measured:
+
+- **A single contact was right.** A box on a fixed box rested exactly as on the floor, tilt 3e-7 rad.
+- **Stacks were a convergence problem.** Two free boxes tilted 3.1e-4 rad at 10 × 1, falling as `h²` with
+  substeps (6.4e-6 at 80 × 1) and with sweeps (1.5e-7 at 10 × 16). Gauss–Seidel stopped short is biased: the point
+  corrected first carries more, and with no friction a tilted face is a slope. The error grew with height: twenty
+  cubes reached only 1e-5 J at any setting tried, and frictionless columns of ten or more fell at every setting.
+- **A positional warm start rested two boxes and unsettled tall stacks.** The impulse carried from substep to
+  substep includes last substep's correction of error as well as the load, and a column rings with it, as the
+  spheres' frictionless column did. Warm friction carried on acts as a spring.
+- **A friction fault, found on the way and kept fixed.** A point's tangential impulse was clamped only while it was
+  pressed and slipping, so a point that let go kept its friction, and a warm start applied it again every substep.
+  Now the whole is always clamped, and a point that lets go gives its friction back.
+- **A blow-up once boxes fell.** A toppling box swings corners in that the step's manifold does not hold; the next
+  step found them centimetres deep and corrected them in one substep, at tens of metres a second. On the soft step
+  the push is capped at 3 m/s.
+
+**Cost:** about 8 to 11 ms a step on the GPU for ten to fifty-five boxes. Most of it is fixed, whatever the number of
+dispatches, and not yet taken apart: the wait for the manifolds, and writing the rounds, are the first suspects.
 
 ### 6. Many boxes: the grid, and the cost
 

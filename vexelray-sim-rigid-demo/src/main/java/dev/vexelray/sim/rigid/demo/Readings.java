@@ -70,11 +70,13 @@ final class Readings {
         set(Line.TIME, String.format("%s %.2f s simulated · %d %s · %d×%d per step", paused ? "Paused at" : "",
                 r.simulated(), r.bodies(), boxes ? "boxes" : "spheres", r.substeps(), r.iterations()).trim());
         if (boxes) {
-            set(Line.OVERLAP, "Boxes meet the walls; each other, not yet");
+            set(Line.OVERLAP, r.boxStep() == null ? "" : String.format("Contacts          %d pairs touching, %d points,"
+                    + " %d rounds", r.boxStep().touching(), r.boxStep().points(), r.boxStep().rounds()));
             set(Line.ENERGY, r.boxState() == null ? "" : String.format("Moving energy     %.2e J (%.2e turning)",
                     r.boxState().kinetic(), r.boxState().rotational()));
             set(Line.SPEED, r.boxState() == null ? "" : String.format("Fastest box       %.3f m/s", r.boxFastest()));
-            set(Line.SOLVE, String.format("Walls             corners swept %d times a substep", Boxes.WALL_PASSES));
+            set(Line.SOLVE, String.format("Soft step         %.0f Hz contacts, %d sweeps a substep", Boxes.CONTACT_HERTZ,
+                    Boxes.WALL_PASSES));
             set(Line.COST, String.format("Step %.2f ms (GPU %.2f) · hand-back %.2f · picture %.2f",
                     r.stepMillis(), r.gpuMillis(), r.handBackMillis(), drawMillis));
             return;

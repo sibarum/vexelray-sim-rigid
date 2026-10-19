@@ -386,7 +386,7 @@ class BoxContactTest {
                 }
                 runner.write(names[k], values);
             }
-            runner.write("params", Boxes.params(1e-3, 0, 0, 0, 1, 1, 1, 0, 0, 1, margin));
+            runner.write("params", Boxes.params(1e-3, 0, 0, 0, 1, 1, 1, 0, 0, margin));
             int[] pairList = new int[2 * pairs];
             for (int k = 0; k < pairList.length; k++) {
                 pairList[k] = k;

@@ -53,6 +53,9 @@ final class Physics implements AutoCloseable {
     /** The world's step, in its own time. */
     static final double STEP_SECONDS = 1.0 / 60;
 
+    /** How far apart two boxes may be at a step's start and still have their contact found: 5 mm. */
+    private static final double BOX_MARGIN = 0.005;
+
     /** Steps owed past which the world's clock forgives them, and the world slows, rather than catch up in a burst. */
     static final int MOST_BEHIND = 2;
 
@@ -103,7 +106,7 @@ final class Physics implements AutoCloseable {
                 ? "No compute queue of its own (" + queue.why() + "), so there is no physics to draw." : "";
         if (context == null) {
             news.report(new PhysicsNews.Report(scenario, false, 0, 0, 0, 0, null, 0, 0, 0, "",
-                    SphereStep.Solve.JACOBI, 0, 0, 0, noQueue, null, 0));
+                    SphereStep.Solve.JACOBI, 0, 0, 0, noQueue, null, 0, null));
         }
     }
 
@@ -228,7 +231,7 @@ final class Physics implements AutoCloseable {
         news.report(new PhysicsNews.Report(scenario, false, sim.bodies(), box ? boxes.substeps() : spheres.substeps(),
                 box ? 1 : spheres.iterations(), simulated, read, stepMillis, gpuMillis, handBackMillis, sim.where(),
                 box ? SphereStep.Solve.JACOBI : spheres.solve(), rounds, waits, unlisted, problem, boxRead,
-                boxFastest));
+                boxFastest, box ? boxes.last() : null));
     }
 
     /** The running simulation's state now, as a start for one of another shape. */
@@ -249,7 +252,7 @@ final class Physics implements AutoCloseable {
     /** Boxes' parameters: the friction control as both coefficients, and the walls' default sweeps. */
     private int[] boxParams(int substeps, Scenario.State s) {
         return Boxes.params(STEP_SECONDS / substeps, 0, s.gravity, 0, s.extent[0], s.extent[1], s.extent[2], friction,
-                friction, Boxes.WALL_PASSES);
+                friction, BOX_MARGIN);
     }
 
     private int[] params(int substeps, Scenario.State s) {

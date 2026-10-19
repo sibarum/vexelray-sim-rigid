@@ -57,12 +57,22 @@ final class BoxScene implements AutoCloseable {
     /** Friction at the walls, static and kinetic: {@link Boxes#walls}. */
     double muStatic;
     double muKinetic;
-    /** Sweeps over its corners each box makes against the walls a substep. */
+    /** Sweeps of each kind a substep makes over its contacts, the walls' and the pairs'. */
     int passes = Boxes.WALL_PASSES;
+    /** How far apart two boxes may be at the start of a step and still have their contact found. */
+    double margin = 0.005;
+    /** Whether every other sweep runs backwards. */
+    boolean symmetric;
+
+    /** What the steps have taken, added up: see {@link BoxStepper.Report}. */
+    int mostRounds;
+    long unplaced;
+    BoxStepper.Report last;
 
     private Accelerator accelerator;
     private PassRunner runner;
     private BoxStep step;
+    private BoxStepper stepper;
 
     BoxScene(int n) {
         this.n = n;
@@ -93,7 +103,8 @@ final class BoxScene implements AutoCloseable {
     }
 
     BoxScene start(Backend backend) {
-        step = new BoxStep(n, substeps);
+        step = new BoxStep(n, substeps, passes, symmetric);
+        stepper = new BoxStepper(step);
         if (backend == Backend.CPU) {
             runner = PassRunner.cpu(step, Boxes.WORKGROUP, PassRunner.NO_SUBGROUP);
         } else {
@@ -109,8 +120,11 @@ final class BoxScene implements AutoCloseable {
         }
         step.constants().forEach(runner::write);
         runner.write("params", Boxes.params(dt / substeps, gx, gy, gz, sx, sy, sz, muStatic, muKinetic,
-                passes));
+                margin));
         for (int s = 0; s < n; s++) {
+            if (im[s] <= 0) {
+                continue;
+            }
             double[] spun = BoxDiagnostics.momentum(new double[] {ax[s], ay[s], az[s]}, turn(s), moment(s));
             for (int a = 0; a < 3; a++) {
                 l[a][s] = (float) spun[a];
@@ -133,8 +147,27 @@ final class BoxScene implements AutoCloseable {
 
     /** {@code frames} steps of {@link #dt}. */
     BoxScene advance(int frames) {
+        BoxStepper.Runner run = new BoxStepper.Runner() {
+            @Override
+            public void run(java.util.List<dev.supirvast.vastir.pass.Pass> passes) {
+                runner.run(passes);
+            }
+
+            @Override
+            public float[] runAndRead(java.util.List<dev.supirvast.vastir.pass.Pass> passes, String buffer) {
+                runner.run(passes).await();
+                return runner.floats(buffer);
+            }
+
+            @Override
+            public void write(String buffer, int[] values) {
+                runner.write(buffer, values);
+            }
+        };
         for (int k = 0; k < frames; k++) {
-            runner.run(step.step());
+            last = stepper.step(run);
+            mostRounds = Math.max(mostRounds, last.rounds());
+            unplaced += last.unplaced();
         }
         return this;
     }

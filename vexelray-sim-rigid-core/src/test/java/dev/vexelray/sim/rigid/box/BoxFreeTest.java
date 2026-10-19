@@ -130,7 +130,7 @@ class BoxFreeTest {
     }
 
     /**
-     * Why {@link Boxes#predict} keeps the angular momentum rather than integrating the gyroscopic term explicitly,
+     * Why {@link Boxes#positions} keeps the angular momentum rather than integrating the gyroscopic term explicitly,
      * {@code ω += h I⁻¹ (−ω × I ω)}: the same tumble, on the host in doubles, at the same substep. Each explicit step
      * adds a step at right angles to {@code L}, so {@code |L|} only grows, and the energy with it.
      */

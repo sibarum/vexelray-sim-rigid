@@ -20,20 +20,20 @@ import static dev.supirvast.vastir.build.Body.i;
 import static dev.supirvast.vastir.build.Body.load;
 import static dev.supirvast.vastir.build.Body.lt;
 import static dev.supirvast.vastir.build.Body.max;
-import static dev.supirvast.vastir.build.Body.min;
 import static dev.supirvast.vastir.build.Body.mod;
 import static dev.supirvast.vastir.build.Body.mul;
 import static dev.supirvast.vastir.build.Body.neg;
+import static dev.supirvast.vastir.build.Body.not;
 import static dev.supirvast.vastir.build.Body.or;
 import static dev.supirvast.vastir.build.Body.sqrt;
 import static dev.supirvast.vastir.build.Body.sub;
 import static dev.supirvast.vastir.build.Body.toFloat;
-import static dev.supirvast.vastir.build.Body.toInt;
 import static dev.supirvast.vastir.build.Body.v;
 
 /**
- * Boxes: solid cuboids, against the walls so far. Stages 1 and 2 of {@code docs/boxes.md}: a box's state, its inertia,
- * its motion with nothing touching it, and its corners against the walls ({@link #walls}), with friction.
+ * Boxes: solid cuboids, against the walls and each other. A box's state and its motion with nothing touching it
+ * (stage 1 of {@code docs/boxes.md}), its corners against the walls ({@link #walls}), and the contact solve the walls
+ * and the pairs of boxes share ({@link #contact}): Box2D v3's soft step, at the level of velocities.
  *
  * <p>A box carries its centre {@code x, y, z}, velocity {@code u, v, w} and orientation {@code qx, qy, qz, qw}, as a
  * sphere does; in place of a sphere's angular velocity, its angular momentum about its centre in the world's frame,
@@ -49,28 +49,41 @@ import static dev.supirvast.vastir.build.Body.v;
  * {@code L = R I Rᵀ ω}. The angular velocity follows the body round: {@code I ω̇ + ω × I ω = 0} in the body's frame,
  * the gyroscopic term.
  *
- * <p>{@link #predict} keeps {@code L} rather than integrating that term. It works out the angular velocity from
+ * <p>{@link #positions} keeps {@code L} rather than integrating that term. It works out the angular velocity from
  * {@code L}, {@code ω = R I⁻¹ Rᵀ L}, turns the box half a substep by it, and works out the angular velocity there; then
  * it turns the box the whole substep by that midpoint angular velocity. The turn is second order, and {@code L} is
- * kept exactly, since nothing writes it.
+ * kept exactly, since nothing else writes it while the box is free. A contact's angular impulse {@code r × P} is
+ * added to {@code L}.
  *
  * <p>On a box tumbling at {@code (1, 2, 3)} rad/s for 10 s at 10 substeps ({@code BoxFreeTest}), this keeps the
- * energy to 1.3e-7 on the CPU and 3.5e-8 on the GPU, where the same sums in doubles leave 3.7e-7: what is left is
- * the integration's own error, a quarter as much at twice the substeps. Two other ways were measured on the same
- * tumble:
+ * energy to 1.3e-7 on the CPU and 3.5e-8 on the GPU, where the same sums in doubles leave 3.7e-7: the integration's
+ * own error. The explicit form, {@code ω += h I⁻¹ (−ω × I ω)}, grew {@code |L|} by 3.8%; the angular velocity as the
+ * state, worked out to {@code L} and back every substep, drifted 1e-4 in energy, because in f32 every round trip
+ * rounded the same way. {@code docs/boxes.md} has the measurements.
  *
- * <ul>
- *   <li><b>The explicit form</b>, {@code ω += h I⁻¹ (−ω × I ω)}, as Müller et al. write it: first order, and every
- *       substep adds a step at right angles to {@code L}, so {@code |L|} only grows, by 3.8%.</li>
- *   <li><b>The angular velocity as the state</b>, with {@code L} worked out from it and back every substep: the same
- *       turn as here. In f32 every round trip rounded the same way, and the energy drifted steadily, 1.4e-4 on the
- *       CPU and −3.5e-4 on the GPU, twice as fast at twice the substeps. Making {@link #rotate} exact for a
- *       quaternion not quite of unit length cut the CPU's to 7.5e-6 and left the GPU's at 1.1e-4, whose division is
- *       not correctly rounded, so that {@code I} and {@code I⁻¹} are not quite inverses. Keeping {@code L} removes
- *       the round trip, and with it both.</li>
- * </ul>
+ * <h2>Contact: the soft step</h2>
  *
- * <p>A constraint that turns a box will add to {@code L}, as a sphere's add to its angular velocity.
+ * Each substep, as Box2D v3 does it ({@code BoxStep} orders the passes):
+ *
+ * <ol>
+ *   <li>{@link #velocities}: gravity into the velocity.</li>
+ *   <li><b>Warm start</b>: every contact's impulse from before applied again, to the velocities.</li>
+ *   <li><b>Solve</b>: each contact's normal impulse, soft, then its friction.</li>
+ *   <li>{@link #positions}: the box moved and turned by its velocities.</li>
+ *   <li><b>Relax</b>: the solve again with no bias, which takes out the velocity the soft push apart left.</li>
+ * </ol>
+ *
+ * <p>A contact's normal impulse drives its closing speed toward a bias: where the two surfaces are apart by
+ * {@code s > 0}, {@code s / h}, so that they may close the gap within the substep and no further, speculatively; where
+ * they overlap, a spring and damper's, {@code max(β s, −push)}, applied with the soft constraint's mass and impulse
+ * scales ({@link #softness}), so that an overlap is pushed apart over a few substeps, and never faster than
+ * {@link #PUSH} metres a second. That limit is what keeps a box found deep in another from leaving it at tens of
+ * metres a second. The impulses are accumulated, the normal kept at least zero, and carried from substep to substep
+ * and step to step: a warm start, which at the level of velocities carries the load alone, where the positional one
+ * carried the last substep's correction of error too, and set a column ringing.
+ *
+ * <p>Friction is an impulse against the contact's sliding velocity, accumulated as a vector in the contact plane, the
+ * whole held to {@code μs λₙ} or cut to {@code μk λₙ} past it.
  *
  * <p>Lengths are in metres, times in seconds, {@code y} up; the walled box the bodies live in runs from the origin to
  * {@code (sx, sy, sz)}, as the spheres' does.
@@ -80,8 +93,11 @@ public final class Boxes {
     /** The workgroup every pass must be registered with, as for spheres. */
     public static final int WORKGROUP = CountingSort.BLOCK;
 
-    /** {@code [h, gx, gy, gz, sx, sy, sz, muStatic, muKinetic, passes, margin]}, see {@link #params}. */
-    public static final int PARAM_COUNT = 11;
+    /**
+     * {@code [h, gx, gy, gz, sx, sy, sz, muStatic, muKinetic, margin, bias, massScale, impulseScale, staticBias,
+     * staticMassScale, staticImpulseScale, push]}, see {@link #params}.
+     */
+    public static final int PARAM_COUNT = 17;
 
     static final int H = 0;
     static final int GX = 1;
@@ -92,23 +108,53 @@ public final class Boxes {
     static final int SZ = 6;
     static final int MU_STATIC = 7;
     static final int MU_KINETIC = 8;
-    static final int PASSES = 9;
-    static final int MARGIN = 10;
+    static final int MARGIN = 9;
+    /** A contact between two moving boxes: its softness ({@link #softness}). */
+    static final int BIAS = 10;
+    static final int MASS_SCALE = 11;
+    static final int IMPULSE_SCALE = 12;
+    /** A contact with a wall or a fixed box: twice as stiff, as Box2D makes it. */
+    static final int STATIC_BIAS = 13;
+    static final int STATIC_MASS_SCALE = 14;
+    static final int STATIC_IMPULSE_SCALE = 15;
+    static final int PUSH_SPEED = 16;
 
-    /** The sweeps over its corners a box's {@link #walls} pass makes, unless told otherwise. */
+    /**
+     * A contact's stiffness, in hertz, held to a quarter of the substep rate as Box2D holds it. Box2D's default is 30,
+     * for bodies of a metre or so; a soft contact is a spring, and a column on springs buckles once its weight's
+     * moment outgrows the springs' resistance to rocking, which falls with the square of the bodies' width. At 30 Hz a
+     * column of ten 10 cm cubes sank 5 mm at its foot and fell; at 150 Hz it rests, 0.2 mm in.
+     */
+    public static final double CONTACT_HERTZ = 150;
+    /** And its damping ratio: Box2D's default, heavily overdamped, so a contact does not bounce. */
+    public static final double DAMPING_RATIO = 10;
+    /** The fastest a contact pushes two overlapping surfaces apart, in metres a second: Box2D's default. */
+    public static final double PUSH = 3;
+
+    /** The sweeps a substep makes over its contacts, solving and relaxing each, unless told otherwise. */
     public static final int WALL_PASSES = 4;
     /** The corners of a box, by the bits of their index: bit 0 the sign along x, bit 1 along y, bit 2 along z. */
     public static final int CORNERS = 8;
     /** The walls, low then high along x, then y, then z. */
     public static final int WALLS = 6;
-    /** Words a box keeps in {@code lambda}: each corner's normal impulse against each wall, this substep. */
+    /** Words a box keeps in {@code lambda}: each corner's normal impulse against each wall. */
     public static final int LAMBDA_WORDS = WALLS * CORNERS;
-    /** Words a box keeps in {@code rub}: each corner's whole tangential impulse against each wall, this substep. */
+    /** Words a box keeps in {@code rub}: each corner's tangential impulse against each wall. */
     public static final int RUB_WORDS = 3 * LAMBDA_WORDS;
 
     /** Every per-box field, in the order {@link BoxStep} holds them. */
     static final String[] BOX = {"x", "y", "z", "u", "v", "w", "lx", "ly", "lz", "qx", "qy", "qz", "qw", "im", "hx",
-            "hy", "hz", "oqx", "oqy", "oqz", "oqw", "dx", "dy", "dz", "jx", "jy", "jz"};
+            "hy", "hz"};
+
+    /** What a sweep over the contacts does. */
+    public enum Sweep {
+        /** Each contact's impulses from before applied again, before anything is solved. */
+        WARM,
+        /** The normals, soft, toward the bias that closes a gap or pushes an overlap apart; then the friction. */
+        SOLVE,
+        /** The same, with no bias where they overlap: the velocity the push apart left is taken out. */
+        RELAX
+    }
 
     private Boxes() {
     }
@@ -121,29 +167,28 @@ public final class Boxes {
      * @param sx the walled box's extent along x, in metres; likewise {@code sy} and {@code sz}
      */
     public static int[] params(double h, double gx, double gy, double gz, double sx, double sy, double sz) {
-        return params(h, gx, gy, gz, sx, sy, sz, 0, 0, WALL_PASSES);
+        return params(h, gx, gy, gz, sx, sy, sz, 0, 0);
     }
 
     /**
-     * As above, with friction and the walls' sweeps.
+     * As above, with friction.
      *
      * @param muStatic  a contact holds while the tangential impulse it needs is at most this times its normal one
      * @param muKinetic a contact that slips is resisted by this times its normal impulse
-     * @param passes    the sweeps over its corners each box's {@link #walls} makes a substep
      */
     public static int[] params(double h, double gx, double gy, double gz, double sx, double sy, double sz,
-                               double muStatic, double muKinetic, int passes) {
-        return params(h, gx, gy, gz, sx, sy, sz, muStatic, muKinetic, passes, 0);
+                               double muStatic, double muKinetic) {
+        return params(h, gx, gy, gz, sx, sy, sz, muStatic, muKinetic, 0);
     }
 
     /**
      * As above, with the contact margin.
      *
-     * @param margin how far apart two boxes may be and still have their contact found ({@link BoxContact#collide}),
-     *               in metres; 0, the default, for only boxes that touch or overlap
+     * @param margin how far apart two surfaces may be and still have their contact found and solved, speculatively,
+     *               in metres; 0, the default, for only those that touch or overlap
      */
     public static int[] params(double h, double gx, double gy, double gz, double sx, double sy, double sz,
-                               double muStatic, double muKinetic, int passes, double margin) {
+                               double muStatic, double muKinetic, double margin) {
         if (!(margin >= 0) || Double.isInfinite(margin)) {
             throw new IllegalArgumentException("a margin is finite and at least 0, got " + margin);
         }
@@ -151,13 +196,33 @@ public final class Boxes {
             throw new IllegalArgumentException("h > 0 and a box of positive size, got h " + h + ", box " + sx + " × "
                     + sy + " × " + sz);
         }
-        if (!(muStatic >= 0) || !(muKinetic >= 0) || Double.isInfinite(muStatic) || Double.isInfinite(muKinetic)
-                || passes < 1) {
-            throw new IllegalArgumentException("friction finite and at least 0, and a pass at least, got " + muStatic
-                    + ", " + muKinetic + " and " + passes);
+        if (!(muStatic >= 0) || !(muKinetic >= 0) || Double.isInfinite(muStatic) || Double.isInfinite(muKinetic)) {
+            throw new IllegalArgumentException("friction finite and at least 0, got " + muStatic + " and "
+                    + muKinetic);
         }
+        double hertz = Math.min(CONTACT_HERTZ, 0.25 / h);
+        double[] soft = softness(hertz, DAMPING_RATIO, h);
+        double[] stiff = softness(2 * hertz, DAMPING_RATIO, h);
         return new int[] {bits(h), bits(gx), bits(gy), bits(gz), bits(sx), bits(sy), bits(sz), bits(muStatic),
-                bits(muKinetic), bits(passes), bits(margin)};
+                bits(muKinetic), bits(margin), bits(soft[0]), bits(soft[1]), bits(soft[2]), bits(stiff[0]),
+                bits(stiff[1]), bits(stiff[2]), bits(PUSH)};
+    }
+
+    /**
+     * A soft constraint's {@code [bias rate, mass scale, impulse scale]}, Box2D's {@code b2MakeSoft}: a spring of
+     * {@code hertz} and damping ratio {@code zeta}, stepped implicitly by {@code h}. With {@code ω = 2π hertz},
+     * {@code a₁ = 2ζ + hω}, {@code a₂ = hω a₁} and {@code a₃ = 1 / (1 + a₂)}: the bias rate {@code ω / a₁}, the mass
+     * scale {@code a₂ a₃}, the impulse scale {@code a₃}.
+     */
+    public static double[] softness(double hertz, double zeta, double h) {
+        if (hertz == 0) {
+            return new double[] {0, 1, 0};
+        }
+        double omega = 2 * Math.PI * hertz;
+        double a1 = 2 * zeta + h * omega;
+        double a2 = h * omega * a1;
+        double a3 = 1 / (1 + a2);
+        return new double[] {omega / a1, a2 * a3, a3};
     }
 
     /**
@@ -168,20 +233,37 @@ public final class Boxes {
         return new double[] {m * (hy * hy + hz * hz) / 3, m * (hx * hx + hz * hz) / 3, m * (hx * hx + hy * hy) / 3};
     }
 
-    // --- the passes ----------------------------------------------------------------------------------------
+    // --- moving the boxes ----------------------------------------------------------------------------------
 
-    static final String[] PREDICT_NAMES = {"x", "y", "z", "u", "v", "w", "im", "params", "lx", "ly", "lz", "qx", "qy",
-            "qz", "qw", "hx", "hy", "hz", "oqx", "oqy", "oqz", "oqw"};
-    static final List<Buffer> PREDICT_BUFFERS = bind(PREDICT_NAMES);
+    static final String[] VELOCITIES_NAMES = {"u", "v", "w", "im", "params"};
+    static final List<Buffer> VELOCITIES_BUFFERS = bind(VELOCITIES_NAMES);
+
+    /** One invocation per box: gravity into its velocity, as a substep begins. */
+    public static Function velocities() {
+        List<Buffer> bs = VELOCITIES_BUFFERS;
+        Buffer params = bs.get(4);
+        int[] gravity = {GX, GY, GZ};
+        Body b = new Body();
+        LocalVar s = b.let("s", new Expr.InvocationId());
+        b.when(lt(v(s), new Expr.InvocationCount()), t -> t.when(gt(load(bs.get(3), v(s)), f(0)), free -> {
+            LocalVar h = free.let("h", load(params, i(H)));
+            for (int a = 0; a < 3; a++) {
+                free.store(bs.get(a), v(s), add(load(bs.get(a), v(s)), mul(v(h), load(params, i(gravity[a])))));
+            }
+        }));
+        return function("boxesVelocities", b);
+    }
+
+    static final String[] POSITIONS_NAMES = {"x", "y", "z", "u", "v", "w", "im", "params", "lx", "ly", "lz", "qx",
+            "qy", "qz", "qw", "hx", "hy", "hz"};
+    static final List<Buffer> POSITIONS_BUFFERS = bind(POSITIONS_NAMES);
 
     /**
-     * One invocation per box: gravity into the velocity, and the box moved along it, by symplectic Euler as a sphere
-     * is; and the box turned, its angular momentum kept ({@link Boxes above}). How the box was turned is kept
-     * in {@code oqx, oqy, oqz, oqw}, for {@link #walls}' friction to measure how far a corner has slipped this
-     * substep. The box is loaded once and stored once.
+     * One invocation per box: moved along its velocity, by symplectic Euler as a sphere is, and turned, its angular
+     * momentum kept ({@link Boxes above}). The box is loaded once and stored once.
      */
-    public static Function predict() {
-        List<Buffer> bs = PREDICT_BUFFERS;
+    public static Function positions() {
+        List<Buffer> bs = POSITIONS_BUFFERS;
         Buffer[] at = {bs.get(0), bs.get(1), bs.get(2)};
         Buffer[] velocity = {bs.get(3), bs.get(4), bs.get(5)};
         Buffer im = bs.get(6);
@@ -189,8 +271,6 @@ public final class Boxes {
         Buffer[] spin = {bs.get(8), bs.get(9), bs.get(10)};  // the angular momentum, lx, ly, lz
         Buffer[] turn = {bs.get(11), bs.get(12), bs.get(13), bs.get(14)};
         Buffer[] half = {bs.get(15), bs.get(16), bs.get(17)};
-        Buffer[] wasTurned = {bs.get(18), bs.get(19), bs.get(20), bs.get(21)};
-        int[] gravity = {GX, GY, GZ};
 
         Body b = new Body();
         LocalVar s = b.let("s", new Expr.InvocationId());
@@ -199,17 +279,11 @@ public final class Boxes {
             t.when(gt(v(inverseMass), f(0)), free -> {
                 LocalVar h = free.let("h", load(params, i(H)));
                 for (int a = 0; a < 3; a++) {
-                    LocalVar from = free.let("from", load(at[a], v(s)));
-                    LocalVar vel = free.let("vel", add(load(velocity[a], v(s)),
-                            mul(v(h), load(params, i(gravity[a])))));
-                    free.store(velocity[a], v(s), v(vel));
-                    free.store(at[a], v(s), add(v(from), mul(v(h), v(vel))));
+                    free.store(at[a], v(s), add(load(at[a], v(s)), mul(v(h), load(velocity[a], v(s)))));
                 }
-
                 LocalVar[] q = new LocalVar[4];
                 for (int k = 0; k < 4; k++) {
                     q[k] = free.let("q", load(turn[k], v(s)));
-                    free.store(wasTurned[k], v(s), v(q[k]));
                 }
                 LocalVar[] momentum = new LocalVar[3];
                 for (int a = 0; a < 3; a++) {
@@ -230,48 +304,33 @@ public final class Boxes {
                 }
             });
         });
-        return function("boxesPredict", b);
+        return function("boxesPositions", b);
     }
 
+    // --- the walls -----------------------------------------------------------------------------------------
+
     static final String[] WALLS_NAMES = {"x", "y", "z", "qx", "qy", "qz", "qw", "im", "hx", "hy", "hz", "params", "u",
-            "v", "w", "oqx", "oqy", "oqz", "oqw", "dx", "dy", "dz", "jx", "jy", "jz", "lambda", "rub"};
+            "v", "w", "lx", "ly", "lz", "lambda", "rub"};
     static final List<Buffer> WALLS_BUFFERS = bind(WALLS_NAMES);
 
     /**
-     * One invocation per box: its eight corners kept inside the six walls, and friction where they touch.
-     *
-     * <p>A corner is a contact with a wall while it is outside it, or while it has pushed against it this substep.
-     * Each is corrected as XPBD corrects a contact with no compliance: by its depth over the generalised inverse mass
-     * {@code w = im + (r × n)ᵀ I⁻¹ (r × n)}, {@code r} from the centre to the corner and {@code I⁻¹} turned into the
-     * world's frame, so a push off-centre turns the box as well as moving it. The corners are swept in turn, each
-     * against the box as the ones before it left it, {@code passes} times. Each corner keeps the normal impulse it
-     * has taken this substep in {@code lambda}, and the whole of it is kept from falling below zero, as sequential
-     * impulses do: a later sweep can draw a corner back by no more than it pushed.
-     *
-     * <p>Then friction, once every normal is corrected, which is what the spheres found it must wait for. A corner's
-     * slip is how far it has moved along the wall since the substep began ({@link Box#slip}); removing it takes a
-     * tangential impulse of {@code |slip| / w}, {@code w} along the slip. Each corner keeps the whole tangential
-     * impulse it has taken this substep in {@code rub}, and the whole is held to {@code μs λₙ}, or cut to
-     * {@code μk λₙ} past it, and only the change applied; the corners are swept {@code passes} times. One sweep, each
-     * corner clamping only its own share, left a box on a slope creeping down it: each corner's push turned the box,
-     * and left slip at the corners already rubbed.
-     *
-     * <p>Every move and every angular impulse {@code r × p} is added up as it is computed, into {@code dx, dy, dz} and
-     * {@code jx, jy, jz}, for {@link #velocity}. The box is loaded once and stored once.
+     * One invocation per box: one {@code sweep} over its eight corners against the six walls, each corner a contact
+     * with each wall ({@link #contact}), the wall fixed and its normal pointing in. A corner is a contact while it is
+     * within the margin of the wall, or holds an impulse from before. Each corner keeps its normal impulse against
+     * each wall in {@code lambda} and its tangential impulse in {@code rub}, from substep to substep and step to
+     * step. With {@code reverse}, the walls and the corners are taken last to first.
      */
-    public static Function walls() {
+    public static Function walls(Sweep sweep, boolean reverse) {
         List<Buffer> bs = WALLS_BUFFERS;
         Buffer[] atBuffer = {bs.get(0), bs.get(1), bs.get(2)};
         Buffer[] turnBuffer = {bs.get(3), bs.get(4), bs.get(5), bs.get(6)};
         Buffer im = bs.get(7);
         Buffer[] half = {bs.get(8), bs.get(9), bs.get(10)};
         Buffer params = bs.get(11);
-        Buffer[] velocityBuffer = {bs.get(12), bs.get(13), bs.get(14)};
-        Buffer[] wasTurnedBuffer = {bs.get(15), bs.get(16), bs.get(17), bs.get(18)};
-        Buffer[] movedBuffer = {bs.get(19), bs.get(20), bs.get(21)};
-        Buffer[] impulseBuffer = {bs.get(22), bs.get(23), bs.get(24)};
-        Buffer lambda = bs.get(25);
-        Buffer rub = bs.get(26);
+        Buffer[] velocity = {bs.get(12), bs.get(13), bs.get(14)};
+        Buffer[] spin = {bs.get(15), bs.get(16), bs.get(17)};
+        Buffer lambda = bs.get(18);
+        Buffer rub = bs.get(19);
         int[] extentParam = {SX, SY, SZ};
 
         Body b = new Body();
@@ -279,121 +338,302 @@ public final class Boxes {
         b.when(lt(v(s), new Expr.InvocationCount()), t -> {
             LocalVar inverseMass = t.let("im", load(im, v(s)));
             t.when(gt(v(inverseMass), f(0)), free -> {
-                Box box = new Box(free, s, inverseMass, atBuffer, turnBuffer, half, velocityBuffer,
-                        free.let("h", load(params, i(H))), wasTurnedBuffer);
+                Moving box = new Moving(free, s, inverseMass, atBuffer, turnBuffer, half, velocity, spin);
+                Soft soft = new Soft(free, params, true);
+                LocalVar base = free.let("base", mul(v(s), i(LAMBDA_WORDS)));
                 LocalVar[] extent = new LocalVar[3];
                 for (int a = 0; a < 3; a++) {
                     extent[a] = free.let("extent", load(params, i(extentParam[a])));
                 }
-                LocalVar base = free.let("base", mul(v(s), i(LAMBDA_WORDS)));
-                LocalVar slot = free.let("slot", i(0));
-                free.loop(lt(v(slot), i(LAMBDA_WORDS)), clear -> {
-                    clear.store(lambda, add(v(base), v(slot)), f(0));
-                    clear.set(slot, add(v(slot), i(1)));
-                });
-
-                LocalVar passes = free.let("passes", toInt(load(params, i(PASSES))));
-                LocalVar pass = free.let("pass", i(0));
-                free.loop(lt(v(pass), v(passes)), sweep -> {
-                    for (int wall = 0; wall < WALLS; wall++) {
-                        int axis = wall / 2;
-                        boolean high = wall % 2 == 1;
-                        int first = wall * CORNERS;
-                        LocalVar[] n = box.normal(sweep, axis, high);
-                        box.eachCorner(sweep, (corner, c, offset, r) -> {
-                            LocalVar reach = corner.let("reach", add(v(box.at[axis]), v(r[axis])));
-                            LocalVar dist = corner.let("dist", high ? sub(v(extent[axis]), v(reach)) : v(reach));
-                            LocalVar at = corner.let("at", add(v(base), add(i(first), v(c))));
-                            LocalVar old = corner.let("old", load(lambda, v(at)));
-                            corner.when(or(lt(v(dist), f(0)), gt(v(old), f(0))), touch -> {
-                                LocalVar w = touch.let("w", box.inverseMassAlong(touch, r, n));
-                                LocalVar total = touch.let("total", max(f(0), sub(v(old), div(v(dist), v(w)))));
-                                touch.store(lambda, v(at), v(total));
-                                LocalVar by = touch.let("by", sub(v(total), v(old)));
-                                LocalVar[] p = new LocalVar[3];
-                                for (int a = 0; a < 3; a++) {
-                                    p[a] = touch.let("p", mul(v(by), v(n[a])));
-                                }
-                                box.push(touch, r, p);
-                            });
-                        });
-                    }
-                    sweep.set(pass, add(v(pass), i(1)));
-                });
-
-                LocalVar muStatic = free.let("muS", load(params, i(MU_STATIC)));
-                LocalVar muKinetic = free.let("muK", load(params, i(MU_KINETIC)));
-                free.when(gt(add(v(muStatic), v(muKinetic)), f(0)), rubbing -> {
-                    LocalVar rubBase = rubbing.let("rubBase", mul(v(s), i(RUB_WORDS)));
-                    LocalVar word = rubbing.let("word", i(0));
-                    rubbing.loop(lt(v(word), i(RUB_WORDS)), clear -> {
-                        clear.store(rub, add(v(rubBase), v(word)), f(0));
-                        clear.set(word, add(v(word), i(1)));
+                for (int order = 0; order < WALLS; order++) {
+                    int wall = reverse ? WALLS - 1 - order : order;
+                    int axis = wall / 2;
+                    boolean high = wall % 2 == 1;
+                    int firstSlot = wall * CORNERS;
+                    LocalVar[] n = box.normal(free, axis, high);
+                    box.eachCorner(free, reverse, (corner, c, offset, r) -> {
+                        LocalVar at = corner.let("at", add(v(base), add(i(firstSlot), v(c))));
+                        LocalVar tangentAt = corner.let("tangentAt", mul(v(at), i(3)));
+                        LocalVar reach = corner.let("reach", add(v(box.at[axis]), v(r[axis])));
+                        LocalVar gap = corner.let("gap", high ? sub(v(extent[axis]), v(reach)) : v(reach));
+                        contact(corner, sweep, gap, n, null, null, box, r, lambda, at, rub, tangentAt, soft);
                     });
-                    LocalVar rubPass = rubbing.let("rubPass", i(0));
-                    rubbing.loop(lt(v(rubPass), v(passes)), sweep -> {
-                        for (int wall = 0; wall < WALLS; wall++) {
-                            int axis = wall / 2;
-                            LocalVar[] n = box.normal(sweep, axis, wall % 2 == 1);
-                            int first = wall * CORNERS;
-                            box.eachCorner(sweep, (corner, c, offset, r) -> {
-                                LocalVar normal = corner.let("normal",
-                                        load(lambda, add(v(base), add(i(first), v(c)))));
-                                corner.when(gt(v(normal), f(0)), touching -> rubCorner(touching, box, offset, r, n,
-                                        normal, rub, add(v(rubBase), mul(add(i(first), v(c)), i(3))), muStatic,
-                                        muKinetic));
-                            });
-                        }
-                        sweep.set(rubPass, add(v(rubPass), i(1)));
-                    });
-                });
-
-                box.store(free, atBuffer, turnBuffer);
-                for (int a = 0; a < 3; a++) {
-                    free.store(movedBuffer[a], v(s), add(load(movedBuffer[a], v(s)), v(box.moved[a])));
-                    free.store(impulseBuffer[a], v(s), add(load(impulseBuffer[a], v(s)), v(box.impulse[a])));
                 }
+                box.store(free, velocity, spin);
             });
         });
-        return function("boxesWalls", b);
+        String name = sweep == Sweep.WARM ? "boxesWallsWarm" : sweep == Sweep.SOLVE ? "boxesWalls" : "boxesWallsRelax";
+        return function(reverse ? name + "Back" : name, b);
+    }
+
+    // --- one contact ---------------------------------------------------------------------------------------
+
+    /** A contact's softness and limits, from the parameters: between moving boxes, or against something fixed. */
+    static final class Soft {
+        final LocalVar h;
+        final LocalVar margin;
+        final LocalVar bias;
+        final LocalVar massScale;
+        final LocalVar impulseScale;
+        final LocalVar push;
+        final LocalVar muStatic;
+        final LocalVar muKinetic;
+
+        Soft(Body b, Buffer params, boolean fixed) {
+            h = b.let("h", load(params, i(H)));
+            margin = b.let("margin", load(params, i(MARGIN)));
+            bias = b.let("bias", load(params, i(fixed ? STATIC_BIAS : BIAS)));
+            massScale = b.let("massScale", load(params, i(fixed ? STATIC_MASS_SCALE : MASS_SCALE)));
+            impulseScale = b.let("impulseScale", load(params, i(fixed ? STATIC_IMPULSE_SCALE : IMPULSE_SCALE)));
+            push = b.let("push", load(params, i(PUSH_SPEED)));
+            muStatic = b.let("muS", load(params, i(MU_STATIC)));
+            muKinetic = b.let("muK", load(params, i(MU_KINETIC)));
+        }
+
+        /** The softness of a fixed contact in place of a moving one's, where {@code fixed}. */
+        void stiffen(Body b, Expr fixed, Buffer params) {
+            b.when(fixed, stiff -> {
+                stiff.set(bias, load(params, i(STATIC_BIAS)));
+                stiff.set(massScale, load(params, i(STATIC_MASS_SCALE)));
+                stiff.set(impulseScale, load(params, i(STATIC_IMPULSE_SCALE)));
+            });
+        }
     }
 
     /**
-     * One corner's friction against one wall, in one sweep: the impulse that would remove its slip, added to the whole
-     * tangential impulse it has taken this substep, which is kept at {@code rub[at]} on; the whole held to
-     * {@code μs λₙ}, or cut to {@code μk λₙ} past it; and only the change applied.
+     * One contact point, one {@code sweep}: between {@code first} at {@code rA} from its centre, or a wall where it is
+     * null, and {@code second} at {@code rB}, the normal {@code n} from the first to the second, the surfaces apart by
+     * {@code gap} along it, negative where they overlap. Its normal impulse is at {@code normals[normalAt]}, and its
+     * tangential impulse, the second's, at {@code tangents[tangentAt]} on.
+     *
+     * <p>Warm: both applied again. Solve: the normal impulse toward the bias ({@link Boxes above}), the whole kept at
+     * least zero, then the friction, the whole held to the cone; each applied as the change. Relax: the same with no
+     * bias where the surfaces overlap. A contact further apart than the margin with no impulse does nothing.
      */
-    private static void rubCorner(Body b, Box box, LocalVar[] offset, LocalVar[] r, LocalVar[] n, LocalVar normal,
-                                  Buffer rub, Expr at, LocalVar muStatic, LocalVar muKinetic) {
-        LocalVar where = b.let("where", at);
-        LocalVar[] slip = box.slip(b, offset, r, n);
-        LocalVar length = b.let("length", sqrt(dot(slip, slip)));
-        b.when(gt(v(length), f(1e-12f)), slipping -> {
-            LocalVar[] along = new LocalVar[3];
-            for (int a = 0; a < 3; a++) {
-                along[a] = slipping.let("along", div(v(slip[a]), v(length)));
+    static void contact(Body b, Sweep sweep, LocalVar gap, LocalVar[] n, Moving first, LocalVar[] rA, Moving second,
+                        LocalVar[] rB, Buffer normals, LocalVar normalAt, Buffer tangents, LocalVar tangentAt,
+                        Soft soft) {
+        LocalVar normal = b.let("normal", load(normals, v(normalAt)));
+        LocalVar[] tangent = new LocalVar[3];
+        for (int a = 0; a < 3; a++) {
+            tangent[a] = b.let("tangent", load(tangents, add(v(tangentAt), i(a))));
+        }
+        Expr holding = or(gt(v(normal), f(0)), gt(dot(tangent, tangent), f(0)));
+        if (sweep == Sweep.WARM) {
+            b.when(holding, warm -> {
+                LocalVar[] p = new LocalVar[3];
+                for (int a = 0; a < 3; a++) {
+                    p[a] = warm.let("p", add(mul(v(normal), v(n[a])), v(tangent[a])));
+                }
+                apply(warm, first, rA, second, rB, p);
+            });
+            return;
+        }
+        b.when(or(lt(v(gap), v(soft.margin)), holding), active -> {
+            // The normal: toward the bias, soft where the surfaces overlap.
+            LocalVar k = active.let("k", inverseMassAlong(active, first, rA, second, rB, n));
+            LocalVar closing = active.let("closing", dot(relative(active, first, rA, second, rB), n));
+            LocalVar bias = active.let("biasSpeed", f(0));
+            LocalVar massScale = active.let("mScale", f(1));
+            LocalVar impulseScale = active.let("iScale", f(0));
+            active.when(gt(v(gap), f(0)), apart -> apart.set(bias, div(v(gap), v(soft.h))));
+            if (sweep == Sweep.SOLVE) {
+                active.when(not(gt(v(gap), f(0))), overlap -> {
+                    overlap.set(bias, max(mul(v(soft.bias), v(gap)), neg(v(soft.push))));
+                    overlap.set(massScale, v(soft.massScale));
+                    overlap.set(impulseScale, v(soft.impulseScale));
+                });
             }
-            LocalVar take = slipping.let("take", div(v(length), box.inverseMassAlong(slipping, r, along)));
-            LocalVar[] old = new LocalVar[3];
+            LocalVar change = active.let("change", sub(neg(mul(div(v(massScale), v(k)), add(v(closing), v(bias)))),
+                    mul(v(impulseScale), v(normal))));
+            LocalVar total = active.let("total", max(f(0), add(v(normal), v(change))));
+            active.store(normals, v(normalAt), v(total));
+            LocalVar[] p = new LocalVar[3];
+            for (int a = 0; a < 3; a++) {
+                p[a] = active.let("p", mul(sub(v(total), v(normal)), v(n[a])));
+            }
+            apply(active, first, rA, second, rB, p);
+
+            // The friction: against the sliding velocity, the whole held to the cone of the normal impulse now.
+            LocalVar[] sliding = relative(active, first, rA, second, rB);
+            LocalVar along = active.let("along", dot(sliding, n));
+            for (int a = 0; a < 3; a++) {
+                active.set(sliding[a], sub(v(sliding[a]), mul(v(along), v(n[a]))));
+            }
             LocalVar[] whole = new LocalVar[3];
             for (int a = 0; a < 3; a++) {
-                old[a] = slipping.let("old", load(rub, add(v(where), i(a))));
-                whole[a] = slipping.let("whole", sub(v(old[a]), mul(v(take), v(along[a]))));
+                whole[a] = active.let("whole", v(tangent[a]));
             }
-            LocalVar size = slipping.let("size", sqrt(dot(whole, whole)));
-            slipping.when(gt(v(size), mul(v(muStatic), v(normal))), kinetic -> {
-                LocalVar cut = kinetic.let("cut", div(mul(v(muKinetic), v(normal)), v(size)));
+            LocalVar speed = active.let("speed", sqrt(dot(sliding, sliding)));
+            active.when(gt(v(speed), f(1e-12f)), slipping -> {
+                LocalVar[] t = new LocalVar[3];
+                for (int a = 0; a < 3; a++) {
+                    t[a] = slipping.let("t", div(v(sliding[a]), v(speed)));
+                }
+                LocalVar kt = slipping.let("kt", inverseMassAlong(slipping, first, rA, second, rB, t));
+                LocalVar stop = slipping.let("stop", div(v(speed), v(kt)));
+                for (int a = 0; a < 3; a++) {
+                    slipping.set(whole[a], sub(v(whole[a]), mul(v(stop), v(t[a]))));
+                }
+            });
+            LocalVar size = active.let("size", sqrt(dot(whole, whole)));
+            active.when(gt(v(size), mul(v(soft.muStatic), v(total))), kinetic -> {
+                LocalVar cut = kinetic.let("cut", div(mul(v(soft.muKinetic), v(total)), v(size)));
                 for (int a = 0; a < 3; a++) {
                     kinetic.set(whole[a], mul(v(whole[a]), v(cut)));
                 }
             });
-            LocalVar[] p = new LocalVar[3];
+            LocalVar[] rubbed = new LocalVar[3];
             for (int a = 0; a < 3; a++) {
-                slipping.store(rub, add(v(where), i(a)), v(whole[a]));
-                p[a] = slipping.let("p", sub(v(whole[a]), v(old[a])));
+                active.store(tangents, add(v(tangentAt), i(a)), v(whole[a]));
+                rubbed[a] = active.let("rubbed", sub(v(whole[a]), v(tangent[a])));
             }
-            box.push(slipping, r, p);
+            apply(active, first, rA, second, rB, rubbed);
         });
+    }
+
+    /** The second's point's velocity less the first's, or less nothing at a wall. */
+    private static LocalVar[] relative(Body b, Moving first, LocalVar[] rA, Moving second, LocalVar[] rB) {
+        LocalVar[] vb = second.pointVelocity(b, rB);
+        if (first == null) {
+            return vb;
+        }
+        LocalVar[] va = first.pointVelocity(b, rA);
+        LocalVar[] out = new LocalVar[3];
+        for (int a = 0; a < 3; a++) {
+            out[a] = b.let("relative", sub(v(vb[a]), v(va[a])));
+        }
+        return out;
+    }
+
+    private static Expr inverseMassAlong(Body b, Moving first, LocalVar[] rA, Moving second, LocalVar[] rB,
+                                         LocalVar[] n) {
+        Expr k = second.inverseMassAlong(b, rB, n);
+        return first == null ? k : add(k, first.inverseMassAlong(b, rA, n));
+    }
+
+    /** The impulse {@code p} on the second at {@code rB}, and against the first at {@code rA}. */
+    private static void apply(Body b, Moving first, LocalVar[] rA, Moving second, LocalVar[] rB, LocalVar[] p) {
+        second.apply(b, rB, p);
+        if (first != null) {
+            LocalVar[] back = new LocalVar[3];
+            for (int a = 0; a < 3; a++) {
+                back[a] = b.let("back", neg(v(p[a])));
+            }
+            first.apply(b, rA, back);
+        }
+    }
+
+    // --- one box, as a solve holds it ----------------------------------------------------------------------
+
+    /** What a corner's work is given: the body, the corner's index, its offset in the box's frame, and in the world's. */
+    @FunctionalInterface
+    interface CornerWork {
+        void at(Body b, LocalVar corner, LocalVar[] offset, LocalVar[] r);
+    }
+
+    /**
+     * A box as a solve holds it: its centre and turn, which a solve reads and does not change, and its velocity,
+     * angular momentum and angular velocity, which it does; loaded once and stored once (the spheres' GPU once lost a
+     * store that was loaded again). The inertia is turned into the world's frame by the turn the box has, which a
+     * velocity solve does not change.
+     */
+    static final class Moving {
+        final LocalVar s;
+        final LocalVar inverseMass;
+        final LocalVar[] at = new LocalVar[3];
+        final LocalVar[] q = new LocalVar[4];
+        final LocalVar[] half = new LocalVar[3];
+        final LocalVar[] inverse;
+        final LocalVar[] velocity = new LocalVar[3];
+        final LocalVar[] momentum = new LocalVar[3];
+        final LocalVar[] omega;
+
+        Moving(Body b, LocalVar s, LocalVar inverseMass, Buffer[] atBuffer, Buffer[] turnBuffer, Buffer[] halfBuffer,
+               Buffer[] velocityBuffer, Buffer[] spinBuffer) {
+            this.s = s;
+            this.inverseMass = inverseMass;
+            for (int a = 0; a < 3; a++) {
+                at[a] = b.let("at", load(atBuffer[a], v(s)));
+                half[a] = b.let("half", load(halfBuffer[a], v(s)));
+                velocity[a] = b.let("vel", load(velocityBuffer[a], v(s)));
+                momentum[a] = b.let("mom", load(spinBuffer[a], v(s)));
+            }
+            for (int k = 0; k < 4; k++) {
+                q[k] = b.let("q", load(turnBuffer[k], v(s)));
+            }
+            inverse = inverseInertia(b, halfBuffer, s, inverseMass);
+            omega = inverseInertiaTimes(b, momentum);
+        }
+
+        /** The unit normal of a wall, pointing inside: {@code +e_axis} for the low wall, {@code −e_axis} for the high. */
+        LocalVar[] normal(Body b, int axis, boolean high) {
+            LocalVar[] n = new LocalVar[3];
+            for (int a = 0; a < 3; a++) {
+                n[a] = b.let("n", f(a == axis ? (high ? -1 : 1) : 0));
+            }
+            return n;
+        }
+
+        /**
+         * {@code work} for each of the eight corners, in a loop, with the corner where the box is turned now: in order,
+         * or with {@code reverse} from the last.
+         */
+        void eachCorner(Body b, boolean reverse, CornerWork work) {
+            LocalVar k = b.let("k", i(0));
+            b.loop(lt(v(k), i(CORNERS)), corner -> {
+                LocalVar c = corner.let("corner", reverse ? sub(i(CORNERS - 1), v(k)) : v(k));
+                LocalVar[] offset = new LocalVar[3];
+                for (int a = 0; a < 3; a++) {
+                    Expr bit = mod(div(v(c), i(1 << a)), i(2));
+                    offset[a] = corner.let("offset", mul(v(half[a]), sub(mul(f(2), toFloat(bit)), f(1))));
+                }
+                work.at(corner, c, offset, rotate(corner, q, offset));
+                corner.set(k, add(v(k), i(1)));
+            });
+        }
+
+        /** {@code I⁻¹ x} with the inertia turned into the world's frame: {@code R I_body⁻¹ Rᵀ x}. */
+        LocalVar[] inverseInertiaTimes(Body b, LocalVar[] x) {
+            return rotate(b, q, scale(b, inverse, rotate(b, conjugate(b, q), x)));
+        }
+
+        /** The generalised inverse mass at {@code r} along the unit {@code n}: {@code im + (r × n)ᵀ I⁻¹ (r × n)}. */
+        Expr inverseMassAlong(Body b, LocalVar[] r, LocalVar[] n) {
+            LocalVar[] rn = cross(b, r, n);
+            return add(v(inverseMass), dot(rn, inverseInertiaTimes(b, rn)));
+        }
+
+        /** The velocity of the point at {@code r} from the centre: {@code v + ω × r}. */
+        LocalVar[] pointVelocity(Body b, LocalVar[] r) {
+            LocalVar[] turning = cross(b, omega, r);
+            LocalVar[] out = new LocalVar[3];
+            for (int a = 0; a < 3; a++) {
+                out[a] = b.let("pv", add(v(velocity[a]), v(turning[a])));
+            }
+            return out;
+        }
+
+        /** The impulse {@code p} at {@code r}: {@code v += im p}, {@code L += r × p}, {@code ω += I⁻¹ (r × p)}. */
+        void apply(Body b, LocalVar[] r, LocalVar[] p) {
+            for (int a = 0; a < 3; a++) {
+                b.set(velocity[a], add(v(velocity[a]), mul(v(inverseMass), v(p[a]))));
+            }
+            LocalVar[] angular = cross(b, r, p);
+            LocalVar[] turn = inverseInertiaTimes(b, angular);
+            for (int a = 0; a < 3; a++) {
+                b.set(momentum[a], add(v(momentum[a]), v(angular[a])));
+                b.set(omega[a], add(v(omega[a]), v(turn[a])));
+            }
+        }
+
+        /** The velocity and angular momentum stored back, once. */
+        void store(Body b, Buffer[] velocityBuffer, Buffer[] spinBuffer) {
+            for (int a = 0; a < 3; a++) {
+                b.store(velocityBuffer[a], v(s), v(velocity[a]));
+                b.store(spinBuffer[a], v(s), v(momentum[a]));
+            }
+        }
     }
 
     // --- for a picture -------------------------------------------------------------------------------------
@@ -461,160 +701,6 @@ public final class Boxes {
         return shown;
     }
 
-    static final String[] VELOCITY_NAMES = {"u", "v", "w", "lx", "ly", "lz", "dx", "dy", "dz", "jx", "jy", "jz",
-            "params"};
-    static final List<Buffer> VELOCITY_BUFFERS = bind(VELOCITY_NAMES);
-
-    /**
-     * One invocation per box: what the constraints moved it by this substep, as a velocity, {@code v += d / h}; and
-     * the angular impulse they gave it, as angular momentum, {@code L += j / h}; both cleared. Added up as they were
-     * computed, for the reason the spheres' moves are, and never read back from two positions.
-     */
-    public static Function velocity() {
-        List<Buffer> bs = VELOCITY_BUFFERS;
-        Body b = new Body();
-        LocalVar s = b.let("s", new Expr.InvocationId());
-        b.when(lt(v(s), new Expr.InvocationCount()), t -> {
-            LocalVar perH = t.let("perH", div(f(1), load(bs.get(12), i(H))));
-            for (int a = 0; a < 6; a++) {
-                Buffer state = bs.get(a);
-                Buffer added = bs.get(6 + a);
-                t.store(state, v(s), add(load(state, v(s)), mul(load(added, v(s)), v(perH))));
-                t.store(added, v(s), f(0));
-            }
-        });
-        return function("boxesVelocity", b);
-    }
-
-    // --- one box, held in locals ---------------------------------------------------------------------------
-
-    /** What a corner's work is given: the body, the corner's index, its offset in the box's frame, and in the world's. */
-    @FunctionalInterface
-    private interface CornerWork {
-        void at(Body b, LocalVar corner, LocalVar[] offset, LocalVar[] r);
-    }
-
-    /**
-     * A box as a pass holds it: its centre and orientation in locals, loaded once and stored once (the spheres' GPU
-     * once lost a store that was loaded again), with what it has been moved and turned by.
-     */
-    private static final class Box {
-        final LocalVar s;
-        final LocalVar inverseMass;
-        final LocalVar[] at = new LocalVar[3];
-        final LocalVar[] q = new LocalVar[4];
-        final LocalVar[] half = new LocalVar[3];
-        final LocalVar[] inverse;
-        /** How far the predict moved the centre this substep, {@code h v}. */
-        final LocalVar[] stepped = new LocalVar[3];
-        final LocalVar[] wasTurned = new LocalVar[4];
-        final LocalVar[] moved = new LocalVar[3];
-        final LocalVar[] impulse = new LocalVar[3];
-        final LocalVar one;
-
-        Box(Body b, LocalVar s, LocalVar inverseMass, Buffer[] atBuffer, Buffer[] turnBuffer, Buffer[] halfBuffer,
-            Buffer[] velocityBuffer, LocalVar h, Buffer[] wasTurnedBuffer) {
-            this.s = s;
-            this.inverseMass = inverseMass;
-            for (int a = 0; a < 3; a++) {
-                at[a] = b.let("at", load(atBuffer[a], v(s)));
-                half[a] = b.let("half", load(halfBuffer[a], v(s)));
-                stepped[a] = b.let("stepped", mul(v(h), load(velocityBuffer[a], v(s))));
-                moved[a] = b.let("moved", f(0));
-                impulse[a] = b.let("impulse", f(0));
-            }
-            for (int k = 0; k < 4; k++) {
-                q[k] = b.let("q", load(turnBuffer[k], v(s)));
-                wasTurned[k] = b.let("wasTurned", load(wasTurnedBuffer[k], v(s)));
-            }
-            inverse = inverseInertia(b, halfBuffer, s, inverseMass);
-            one = b.let("one", f(1));
-        }
-
-        /** The unit normal of a wall, pointing inside: {@code +e_axis} for the low wall, {@code −e_axis} for the high. */
-        LocalVar[] normal(Body b, int axis, boolean high) {
-            LocalVar[] n = new LocalVar[3];
-            for (int a = 0; a < 3; a++) {
-                n[a] = b.let("n", f(a == axis ? (high ? -1 : 1) : 0));
-            }
-            return n;
-        }
-
-        /** {@code work} for each of the eight corners, in a loop, with the corner where the box is turned now. */
-        void eachCorner(Body b, CornerWork work) {
-            LocalVar c = b.let("corner", i(0));
-            b.loop(lt(v(c), i(CORNERS)), corner -> {
-                LocalVar[] offset = new LocalVar[3];
-                for (int a = 0; a < 3; a++) {
-                    Expr bit = mod(div(v(c), i(1 << a)), i(2));
-                    offset[a] = corner.let("offset", mul(v(half[a]), sub(mul(f(2), toFloat(bit)), f(1))));
-                }
-                work.at(corner, c, offset, rotate(corner, q, offset));
-                corner.set(c, add(v(c), i(1)));
-            });
-        }
-
-        /** {@code I⁻¹ x} with the inertia turned into the world's frame: {@code R I_body⁻¹ Rᵀ x}. */
-        LocalVar[] inverseInertiaTimes(Body b, LocalVar[] x) {
-            return rotate(b, q, scale(b, inverse, rotate(b, conjugate(b, q), x)));
-        }
-
-        /** The generalised inverse mass at {@code r} along the unit {@code n}: {@code im + (r × n)ᵀ I⁻¹ (r × n)}. */
-        Expr inverseMassAlong(Body b, LocalVar[] r, LocalVar[] n) {
-            LocalVar[] rn = cross(b, r, n);
-            return add(v(inverseMass), dot(rn, inverseInertiaTimes(b, rn)));
-        }
-
-        /** The positional impulse {@code p} at {@code r}: the box moved by {@code im p} and turned by {@code I⁻¹ (r × p)}. */
-        void push(Body b, LocalVar[] r, LocalVar[] p) {
-            for (int a = 0; a < 3; a++) {
-                LocalVar move = b.let("move", mul(v(inverseMass), v(p[a])));
-                b.set(at[a], add(v(at[a]), v(move)));
-                b.set(moved[a], add(v(moved[a]), v(move)));
-            }
-            LocalVar[] angular = cross(b, r, p);
-            for (int a = 0; a < 3; a++) {
-                b.set(impulse[a], add(v(impulse[a]), v(angular[a])));
-            }
-            LocalVar[] now = turned(b, q, inverseInertiaTimes(b, angular), one);
-            for (int k = 0; k < 4; k++) {
-                b.set(q[k], v(now[k]));
-            }
-        }
-
-        /**
-         * How far the corner at {@code offset}, now at {@code r} from the centre, has moved along the wall of normal
-         * {@code n} since the substep began: the centre's travel, {@code h v} and what the constraints moved it by, as
-         * they were computed, and the turn's, {@code r} less where the corner was from the centre then.
-         *
-         * <p>Not the difference of two positions. That keeps only what f32 holds of a position a metre from the
-         * origin, and a box resting on a 20° slope crept down it at 1.5e-5 m/s, a fifth of an ulp a substep.
-         */
-        LocalVar[] slip(Body b, LocalVar[] offset, LocalVar[] r, LocalVar[] n) {
-            LocalVar[] then = rotate(b, wasTurned, offset);
-            LocalVar[] moved = new LocalVar[3];
-            for (int a = 0; a < 3; a++) {
-                moved[a] = b.let("travel", add(add(v(stepped[a]), v(this.moved[a])), sub(v(r[a]), v(then[a]))));
-            }
-            LocalVar across = b.let("across", dot(moved, n));
-            LocalVar[] slip = new LocalVar[3];
-            for (int a = 0; a < 3; a++) {
-                slip[a] = b.let("slip", sub(v(moved[a]), mul(v(across), v(n[a]))));
-            }
-            return slip;
-        }
-
-        /** The centre and orientation stored back, once. */
-        void store(Body b, Buffer[] atBuffer, Buffer[] turnBuffer) {
-            for (int a = 0; a < 3; a++) {
-                b.store(atBuffer[a], v(s), v(at[a]));
-            }
-            for (int k = 0; k < 4; k++) {
-                b.store(turnBuffer[k], v(s), v(q[k]));
-            }
-        }
-    }
-
     // --- building blocks -----------------------------------------------------------------------------------
 
     private static Expr dot(LocalVar[] a, LocalVar[] b) {
@@ -670,7 +756,7 @@ public final class Boxes {
      * rounding, and a turn by a {@code q} of length {@code s} is {@code (1 − s²) p + s² R p}: where the rounding leans
      * one way, every turn adds the same error ({@link Boxes above}).
      */
-    private static LocalVar[] rotate(Body b, LocalVar[] q, LocalVar[] p) {
+    static LocalVar[] rotate(Body b, LocalVar[] q, LocalVar[] p) {
         LocalVar[] axis = {q[0], q[1], q[2]};
         LocalVar twice = b.let("twice", div(f(2), add(add(mul(v(q[0]), v(q[0])), mul(v(q[1]), v(q[1]))),
                 add(mul(v(q[2]), v(q[2])), mul(v(q[3]), v(q[3]))))));

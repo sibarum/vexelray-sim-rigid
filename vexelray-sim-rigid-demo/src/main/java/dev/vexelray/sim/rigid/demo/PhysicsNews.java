@@ -1,6 +1,7 @@
 package dev.vexelray.sim.rigid.demo;
 
 import dev.vexelray.sim.rigid.box.BoxDiagnostics;
+import dev.vexelray.sim.rigid.box.BoxStepper;
 import dev.vexelray.sim.rigid.sphere.SphereDiagnostics;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
 
@@ -33,14 +34,16 @@ final class PhysicsNews {
      * @param problem    why there is no physics, or an empty string
      * @param boxState   for boxes, the readings of the state as of the last time they were read back; null otherwise
      * @param boxFastest for boxes, the fastest centre then, in metres a second
+     * @param boxStep    for boxes, what the last step's contacts took; null otherwise
      */
     record Report(Scenario scenario, boolean building, int bodies, int substeps, int iterations, double simulated,
                   SphereDiagnostics state, double stepMillis, double gpuMillis, double handBackMillis,
                   String where, SphereStep.Solve solve, double rounds, double waits, long unlisted,
-                  String problem, BoxDiagnostics boxState, double boxFastest) {
+                  String problem, BoxDiagnostics boxState, double boxFastest,
+                  BoxStepper.Report boxStep) {
 
         static Report waiting(Scenario scenario) {
-            return new Report(scenario, true, 0, 0, 0, 0, null, 0, 0, 0, "", SphereStep.Solve.JACOBI, 0, 0, 0, "", null, 0);
+            return new Report(scenario, true, 0, 0, 0, 0, null, 0, 0, 0, "", SphereStep.Solve.JACOBI, 0, 0, 0, "", null, 0, null);
         }
     }
 
