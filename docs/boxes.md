@@ -1,6 +1,6 @@
 # Boxes: a contact manifold, and stacking measured
 
-Planned on 2026-10-19; nothing here is built yet. The plan follows the sphere work: each stage is built far enough to
+Planned on 2026-10-19. Stage 1 is built; the rest is not yet. The plan follows the sphere work: each stage is built far enough to
 be measured against a known answer, and records what it found under its own heading. Where a measurement changes the
 plan, the stage says how.
 
@@ -44,21 +44,59 @@ generalised inverse mass `w = 1/m + (r × n)ᵀ I⁻¹ (r × n)`, with `I⁻¹` 
 `R I_body⁻¹ Rᵀ`. Friction is the same clamp as the spheres' at `μ λₙ`, and restitution the same velocity pass. A box
 needs no rolling resistance: its faces stop it.
 
-**Gyroscopic torque in the predict.** `ω += h I⁻¹ (τ − ω × I ω)`, in the body frame. Without it, a free box keeps a
-spin about any axis, which is wrong for any axis but the largest and smallest moments.
+**The angular momentum is the state.** With nothing touching a box, its angular momentum in the world's frame stays
+the same, while its angular velocity follows the body round. Keeping `L` and working out `ω` from it turns a free box
+correctly, including the flip about the intermediate axis, and keeps `L` exactly. The plan first had an explicit
+gyroscopic term here; stage 1 measured it and the alternatives.
 
 ## The plan
 
-### 1. A box on its own: state, inertia, free motion
+### 1. A box on its own: state, inertia, free motion — built, measured (2026-10-19)
 
-A box carries the spheres' fields, plus half-extents `hx, hy, hz` and an inverse body inertia, which is diagonal:
-`12 / (m (b² + c²))` and the like. `predict` turns the orientation, as the spheres' does, and adds the gyroscopic term.
+`dev.vexelray.sim.rigid.box`: `Boxes`, `BoxStep` and `BoxDiagnostics`. A box carries the spheres' centre, velocity
+and orientation, half-extents `hx, hy, hz`, and **its angular momentum `lx, ly, lz` in the world's frame in place of
+an angular velocity**. Its principal moments, `m (b² + c²) / 3` from the half-extents, need no buffer. A substep is
+only `predict` so far.
 
-Known answers:
-- A spin about the largest or the smallest principal axis is kept.
-- A torque-free tumble keeps its angular momentum in the world frame, and its energy, to f32 and first order.
-- **The intermediate axis flips** (the Dzhanibekov effect): a spin about the middle axis, nudged, turns over
-  periodically. The period is known from the moments and the nudge, and the test checks it.
+**What changed from the plan: the angular momentum is the state, and there is no gyroscopic term.** In free motion
+`L` is what stays constant, so `predict` never writes it. It works out `ω = R I⁻¹ Rᵀ L`, turns the box half a
+substep, works out `ω` again, and turns the box the whole substep by that. The turn is second order, and `L` is kept
+to the bit. Measured against the alternatives on a 0.1 × 0.2 × 0.4 m box tumbling at `(1, 2, 3)` rad/s for 10 s at
+10 substeps:
+
+| Predict | Drift in `L` | Drift in energy |
+| --- | --- | --- |
+| Explicit, `ω += h I⁻¹ (−ω × I ω)`, as planned (host, doubles) | `|L|` +3.8% | grows with it |
+| `ω` as the state, `L` worked out from it and back every substep | 5e-7 / 1.2e-6 | +1.4e-4 / −3.5e-4 |
+| The same, rotations exact for a quaternion not quite of unit length | — | +7.5e-6 / +1.1e-4 |
+| `L` as the state | 0 / 0 | +1.3e-7 / +3.5e-8 |
+| `L` as the state, host, doubles | — | −3.7e-7 |
+
+Pairs are CPU / GPU.
+
+**A finding on the way: in f32, a round trip through `R I Rᵀ` and back leans one way.** In the middle rows the energy
+drifted in proportion to the number of substeps, at a rate that changed sign between backends. In doubles the same
+sums lost 3.7e-7, falling fourfold as the substeps doubled. Two biases added up:
+
+- A quaternion normalised in f32 is not quite of unit length, and turning by it gives `(1 − s²) p + s² R p`.
+  Dividing by `|q|²` in the turn fixes that, and is kept.
+- The GPU's division is not correctly rounded, so `I` and `I⁻¹` worked out by division are not quite inverses.
+  Keeping `L` as the state takes the round trip away.
+
+When contacts come, they add to `L`.
+
+`BoxFreeTest`, both backends:
+
+| Case | Known answer | Holds to |
+| --- | --- | --- |
+| Free fall from 8 m, 0.5 s | symplectic Euler's sum | 1e-5 m |
+| 5 rad/s about the largest or smallest axis, 10 s | spin kept, turned by 50 rad about it | 1e-4 rad/s, 1e-3 rad |
+| The same, nudged by 0.1 rad/s about each other axis | stays near the axis | under 0.056 rad off |
+| Tumble at `(1, 2, 3)` rad/s, 10 s | `L` and energy kept | `L` to the bit, energy to 1e-6 |
+| 5 rad/s about the intermediate axis, nudged by 0.1 about the smallest | turns over every half period of the closed form (Landau and Lifshitz §37), 3.403 s | 0.5%; measured 0.2% |
+
+The flip is a sharp test. The nudge leaves the spin 8e-5 of `M²` from the separatrix, and the period depends on the
+logarithm of that distance. With the predict that drifted by 1e-4 in energy, the flips were 1–2% off.
 
 ### 2. A box against the walls
 
