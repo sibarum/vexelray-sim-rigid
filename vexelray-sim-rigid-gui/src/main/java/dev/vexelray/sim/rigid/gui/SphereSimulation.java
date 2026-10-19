@@ -157,6 +157,7 @@ public final class SphereSimulation implements AutoCloseable {
             shown[base + 1] = shown[base + 5] = y[s];
             shown[base + 2] = shown[base + 6] = z[s];
             shown[base + 3] = r[s];
+            shown[base + Spheres.TURNED_BEFORE + 3] = shown[base + Spheres.TURNED_AFTER + 3] = 1;
         }
         runner.write("shown", shown);
     }

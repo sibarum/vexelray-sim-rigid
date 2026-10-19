@@ -67,6 +67,9 @@ import static dev.supirvast.vastir.build.Body.vec4;
  * tested by one quadratic, of a sphere that bounds the squashed one, and only those met nearer than anything yet are
  * tested as squashed.
  *
+ * <p>A sphere is painted like a beach ball, in eight octants of its own frame, alternately its colour and paler, so
+ * that its spin shows: the orientation is blended between the steps as the centre is.
+ *
  * <p>Coordinates are the simulation's: metres, {@code y} up, the box from the origin to {@code (sx, sy, sz)}. The
  * camera arrives as an eye and three axes, which the host works out from its orbit.
  */
@@ -108,6 +111,8 @@ final class SphereShader {
     private static final double[] FLOOR_B = {0.24, 0.25, 0.27};
     private static final double[] BALL_A = {0.90, 0.55, 0.22};
     private static final double[] BALL_B = {0.30, 0.62, 0.86};
+    /** How far toward white a sphere's paler octants are. */
+    private static final double PALE = 0.45;
 
     private SphereShader() {
     }
@@ -141,6 +146,7 @@ final class SphereShader {
         LocalVar best = b.let("best", f(1e30));
         LocalVar hit = b.let("hit", f(-1));
         LocalVar[] normal = {b.let("nx", f(0)), b.let("ny", f(0)), b.let("nz", f(0))};
+        LocalVar[] local = {b.let("lx", f(0)), b.let("ly", f(0)), b.let("lz", f(0))};
         LocalVar k = b.let("k", i(0));
         b.loop(lt(v(k), v(count)), pass -> {
             LocalVar base = pass.let("base", mul(v(k), i(Spheres.SHOWN_STRIDE)));
@@ -164,7 +170,7 @@ final class SphereShader {
                 Expr ahead = gt(sub(v(root), v(half)), f(0));
                 Expr sooner = lt(sub(neg(v(half)), v(root)), v(best));
                 meets.when(and(ahead, sooner), near -> squashed(near, k, base, c, r, gain, lift, eye, d, alpha,
-                        best, hit, normal));
+                        best, hit, normal, local));
             });
             pass.set(k, add(v(k), i(1)));
         });
@@ -216,8 +222,11 @@ final class SphereShader {
             LocalVar g = ball.let("g", mul(v(hit), f(0.618034)));
             LocalVar tint = ball.let("tint", sub(v(g), floor(v(g))));
             LocalVar light = ball.let("light", add(f(0.22), mul(f(0.78), v(diffuse))));
+            LocalVar patch = ball.let("patch", f(0));
+            ball.when(gt(turned(ball, hit, alpha, local), f(0)), pale -> pale.set(patch, f(PALE)));
             for (int a = 0; a < 3; a++) {
-                ball.set(rgb[a], add(mul(mix(f(BALL_A[a]), f(BALL_B[a]), v(tint)), v(light)), v(spec)));
+                Expr colour = mix(mix(f(BALL_A[a]), f(BALL_B[a]), v(tint)), f(1), v(patch));
+                ball.set(rgb[a], add(mul(colour, v(light)), v(spec)));
             }
         });
 
@@ -269,7 +278,7 @@ final class SphereShader {
      */
     private static void squashed(Body b, LocalVar k, LocalVar base, LocalVar[] c, LocalVar r, LocalVar gain,
                                  LocalVar lift, LocalVar[] eye, LocalVar[] d, LocalVar alpha, LocalVar best,
-                                 LocalVar hit, LocalVar[] normal) {
+                                 LocalVar hit, LocalVar[] normal, LocalVar[] local) {
         // I − g F, as xx, yy, zz, xy, xz, yz.
         LocalVar[] m = new LocalVar[6];
         for (int j = 0; j < 6; j++) {
@@ -313,6 +322,7 @@ final class SphereShader {
                 LocalVar[] u = new LocalVar[3];
                 for (int a = 0; a < 3; a++) {
                     u[a] = nearer.let("u", add(v(os[a]), mul(v(t), v(ds[a]))));
+                    nearer.set(local[a], v(u[a]));
                 }
                 LocalVar[] n = times(nearer, inverse, u);
                 for (int a = 0; a < 3; a++) {
@@ -320,6 +330,51 @@ final class SphereShader {
                 }
             });
         });
+    }
+
+    /**
+     * Which of its eight octants the point {@code local} on sphere {@code hit} is in, in the sphere's own frame: the
+     * product of its coordinates there, positive in four octants and negative in the other four.
+     *
+     * <p>The orientation is blended between the steps as the centre is, by normalised lerp, taken the short way round.
+     * It is left unnormalised: turning by {@code q} scales by {@code |q|²}, which changes no sign. {@code local} is in
+     * the sphere's space before it is squashed, so the patches stay put on the sphere however it is pressed.
+     */
+    private static Expr turned(Body b, LocalVar hit, LocalVar alpha, LocalVar[] local) {
+        LocalVar base = b.let("tb", mul(toInt(v(hit)), i(Spheres.SHOWN_STRIDE)));
+        LocalVar[] before = new LocalVar[4];
+        LocalVar[] after = new LocalVar[4];
+        for (int a = 0; a < 4; a++) {
+            before[a] = b.let("q0", load(SHOWN, add(v(base), i(Spheres.TURNED_BEFORE + a))));
+            after[a] = b.let("q1", load(SHOWN, add(v(base), i(Spheres.TURNED_AFTER + a))));
+        }
+        LocalVar way = b.let("way", f(1));
+        Expr aligned = add(dot(before, after), mul(v(before[3]), v(after[3])));
+        b.when(lt(aligned, f(0)), back -> back.set(way, f(-1)));
+        // The inverse turn: the conjugate, −(qx, qy, qz) and qw.
+        LocalVar[] q = new LocalVar[3];
+        for (int a = 0; a < 3; a++) {
+            q[a] = b.let("q", neg(mix(mul(v(before[a]), v(way)), v(after[a]), v(alpha))));
+        }
+        LocalVar w = b.let("qw", mix(mul(v(before[3]), v(way)), v(after[3]), v(alpha)));
+        // p + w t + q × t, with t = 2 q × p.
+        LocalVar[] t = cross(b, q, local);
+        for (int a = 0; a < 3; a++) {
+            b.set(t[a], mul(f(2), v(t[a])));
+        }
+        LocalVar[] qt = cross(b, q, t);
+        LocalVar[] p = new LocalVar[3];
+        for (int a = 0; a < 3; a++) {
+            p[a] = b.let("p", add(v(local[a]), add(mul(v(w), v(t[a])), v(qt[a]))));
+        }
+        return mul(mul(v(p[0]), v(p[1])), v(p[2]));
+    }
+
+    private static LocalVar[] cross(Body b, LocalVar[] x, LocalVar[] y) {
+        return new LocalVar[] {
+                b.let("cx", sub(mul(v(x[1]), v(y[2])), mul(v(x[2]), v(y[1])))),
+                b.let("cy", sub(mul(v(x[2]), v(y[0])), mul(v(x[0]), v(y[2])))),
+                b.let("cz", sub(mul(v(x[0]), v(y[1])), mul(v(x[1]), v(y[0]))))};
     }
 
     /** Word {@code word} of sphere {@code base}'s pressing, blended between the steps as its centre is. */

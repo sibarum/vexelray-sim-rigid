@@ -45,6 +45,34 @@ class SpinTest {
     }
 
     /**
+     * The picture's buffer carries the orientation each step ended on, and the one before it in the "before" slot, so a
+     * picture can blend the spin as it blends the centre.
+     */
+    @ParameterizedTest
+    @MethodSource("dev.vexelray.sim.rigid.sphere.SpheresTest#everySolve")
+    void thePictureIsGivenTheOrientationBeforeAndAfterTheStep(Backend backend, SphereStep.Solve solve) {
+        try (Scene scene = new Scene(1).uniform(0.1, 1)) {
+            scene.gy = 0;
+            scene.x[0] = scene.y[0] = scene.z[0] = 0.5f;
+            scene.ay[0] = 3;
+            scene.solve = solve;
+            scene.start(backend).advance(2);
+            float[] earlier = scene.shown().clone();
+            scene.advance(1);
+            float[] shown = scene.shown();
+            float[] q = scene.orientation(0);
+
+            for (int k = 0; k < 4; k++) {
+                assertEquals(q[k], shown[Spheres.TURNED_AFTER + k], 0, "orientation component " + k);
+                assertEquals(earlier[Spheres.TURNED_AFTER + k], shown[Spheres.TURNED_BEFORE + k], 0,
+                        "orientation component " + k + " kept from the step before");
+            }
+            // Three steps at 3 rad/s: 0.15 rad, so qy = sin(0.075).
+            assertEquals(0.075, q[1], 1e-3, "the sphere has turned, so the comparison is not of the identity");
+        }
+    }
+
+    /**
      * A sphere spinning on the floor, with no friction, keeps its spin and rests where a still one would; and the
      * diagnostics count the spin's energy, {@code ½ · ⅖ m r² ω²}.
      */

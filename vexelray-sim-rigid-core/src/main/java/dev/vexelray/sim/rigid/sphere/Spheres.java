@@ -1647,12 +1647,16 @@ public final class Spheres {
 
     /**
      * Floats per sphere in {@code shown}: the centre before the step, the radius, the centre after, one spare, then the
-     * pressing ({@link #show}) before the step and after it, {@link #PRESSING_WORDS} each.
+     * pressing ({@link #show}) before the step and after it, {@link #PRESSING_WORDS} each, then the orientation before
+     * the step and after it, {@code qx, qy, qz, qw} each.
      */
-    public static final int SHOWN_STRIDE = 32;
+    public static final int SHOWN_STRIDE = 40;
     /** Where in a sphere's {@code shown} its pressing before the step starts, and after it. */
     public static final int PRESSED_BEFORE = 8;
     public static final int PRESSED_AFTER = 20;
+    /** Where in a sphere's {@code shown} its orientation before the step starts, and after it. */
+    public static final int TURNED_BEFORE = 32;
+    public static final int TURNED_AFTER = 36;
     /**
      * A pressing's words: the flattening {@code xx, yy, zz, xy, xz, yz}, the lean {@code x, y, z}, the flattening's
      * trace, the lean's length, and one spare.
@@ -1663,10 +1667,11 @@ public final class Spheres {
     public static final int TRACE = 9;
     public static final int LEAN_LENGTH = 10;
 
-    static final String[] SHOW_NAMES = {"x", "y", "z", "r", "params", "shown"};
+    static final String[] SHOW_NAMES = {"x", "y", "z", "r", "params", "shown", "qx", "qy", "qz", "qw"};
     static final List<Buffer> SHOW_BUFFERS = bind(SHOW_NAMES);
-    static final String[] GRID_SHOW_NAMES = {"x", "y", "z", "r", "params", "shown", "keys", "starts", "order"};
-    static final List<Buffer> GRID_SHOW_BUFFERS = bind(GRID_SHOW_NAMES, 6);
+    static final String[] GRID_SHOW_NAMES = {"x", "y", "z", "r", "params", "shown", "qx", "qy", "qz", "qw", "keys",
+            "starts", "order"};
+    static final List<Buffer> GRID_SHOW_BUFFERS = bind(GRID_SHOW_NAMES, 10);
 
     /** {@link #show(SphereGrid)} testing every sphere against every other, for a step with no grid. */
     public static Function show() {
@@ -1676,7 +1681,7 @@ public final class Spheres {
     /**
      * One invocation per sphere, at the end of a step: the centre the last step ended on moved to the "before" slot
      * of {@code shown}, and the centre this one ended on put in the "after" slot, with the radius; likewise the
-     * sphere's pressing. A picture blends the two by how far the frame is between the steps, and reads one buffer to
+     * sphere's pressing and its orientation. A picture blends the two by how far the frame is between the steps, and reads one buffer to
      * do it.
      *
      * <p>The pressing is what the overlaps left at the end of the step would do to a sphere that could give, for a
@@ -1710,6 +1715,10 @@ public final class Spheres {
             t.store(shown, add(v(base), i(3)), v(rs));
             for (int k = 0; k < PRESSING_WORDS; k++) {
                 t.store(shown, add(v(base), i(PRESSED_BEFORE + k)), load(shown, add(v(base), i(PRESSED_AFTER + k))));
+            }
+            for (int k = 0; k < 4; k++) {
+                t.store(shown, add(v(base), i(TURNED_BEFORE + k)), load(shown, add(v(base), i(TURNED_AFTER + k))));
+                t.store(shown, add(v(base), i(TURNED_AFTER + k)), load(bs.get(6 + k), v(s)));
             }
 
             // xx, yy, zz, xy, xz, yz, then the lean.
@@ -1764,11 +1773,11 @@ public final class Spheres {
                     next.set(o, add(v(o), i(1)));
                 });
             } else {
-                LocalVar key = t.let("key", load(bs.get(6), v(s)));
+                LocalVar key = t.let("key", load(bs.get(10), v(s)));
                 LocalVar ix = t.let("ix", mod(v(key), i(grid.nx())));
                 LocalVar iy = t.let("iy", mod(div(v(key), i(grid.nx())), i(grid.ny())));
                 LocalVar iz = t.let("iz", div(v(key), i(grid.nx() * grid.ny())));
-                around(t, grid, ix, iy, iz, bs.get(7), bs.get(8), against);
+                around(t, grid, ix, iy, iz, bs.get(11), bs.get(12), against);
             }
 
             LocalVar after = t.let("after", add(v(base), i(PRESSED_AFTER)));

@@ -337,8 +337,7 @@ contacts a step unsolved on the pile of 4096.
         as a whole; at eight it creeps at 0.3 mm/s.
   - [x] **The demo has friction** (2026-10-18): a Friction control (none, 0.3, 0.5, 1), static and kinetic alike,
         which only Gauss–Seidel applies, and a scenario, *Heap on a bed*: 350 spheres dropped as a tall, narrow stack
-        on a bed of 400 fixed ones. With friction it stands as a steep heap; without, a lower, ragged mound. Still
-        open from this stage: the picture draws no orientation, so a spin cannot be seen.
+        on a bed of 400 fixed ones. With friction it stands as a steep heap; without, a lower, ragged mound.
 
         **A finding on the way: friction alone makes no heap.** The same stack on the smooth floor spreads into a
         single layer at μ = 0.5 as at none. Friction holds a contact point still, and a sphere rolling has none
@@ -386,6 +385,12 @@ contacts a step unsolved on the pile of 4096.
       to move ends a step with no wall overlap, and the floor never squashes it; only spheres do. Squashing by load
       rather than overlap — the normal moves a contact made over the step, as a force — would show a ball's weight
       and an impact on the floor, at the cost of every contact pass summing them.
+- [x] **The picture shows a sphere's spin** (2026-10-19). `shown` grows to 40 floats a sphere, with the orientation
+      before the step and after it, which `Spheres.show` keeps as it keeps the centre. The shader blends the two by
+      normalised lerp, the short way round, turns the point the ray met on the unsquashed sphere into the sphere's own
+      frame, and paints the four octants where the product of its coordinates is positive paler: a beach ball. In the
+      demo's *Heap of 343* at μ = 0.5 the spheres that rolled out lie at every angle; at none they all face alike.
+      `SpinTest` checks that the buffer carries the orientation each step ended on, and the one before.
 - [ ] **Boxes**: orientation, a contact manifold, and stacking measured the way the column is.
 - [ ] **Fixed point against f32**, as the fluid's scatter was measured. The velocity finding above is a reason to
       look: f32 positions already cost something here.
