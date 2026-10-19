@@ -30,6 +30,7 @@ class BoxFreeTest {
     @MethodSource("dev.vexelray.sim.rigid.box.BoxScene#backends")
     void aFreeFallIsSymplecticEulers(Backend backend) {
         try (BoxScene scene = new BoxScene(1).uniform(HX, HY, HZ, 1)) {
+            scene.sy = 20;
             scene.x[0] = scene.z[0] = 0.5f;
             scene.y[0] = 8;
             scene.start(backend).advanceSeconds(0.5).read();

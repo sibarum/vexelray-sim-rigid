@@ -54,6 +54,11 @@ final class BoxScene implements AutoCloseable {
     /** The frame: a step is this long, cut into {@link #substeps}. */
     double dt = 1.0 / 60;
     int substeps = 10;
+    /** Friction at the walls, static and kinetic: {@link Boxes#walls}. */
+    double muStatic;
+    double muKinetic;
+    /** Sweeps over its corners each box makes against the walls a substep. */
+    int passes = Boxes.WALL_PASSES;
 
     private Accelerator accelerator;
     private PassRunner runner;
@@ -103,7 +108,8 @@ final class BoxScene implements AutoCloseable {
             runner.clear();
         }
         step.constants().forEach(runner::write);
-        runner.write("params", Boxes.params(dt / substeps, gx, gy, gz, sx, sy, sz));
+        runner.write("params", Boxes.params(dt / substeps, gx, gy, gz, sx, sy, sz, muStatic, muKinetic,
+                passes));
         for (int s = 0; s < n; s++) {
             double[] spun = BoxDiagnostics.momentum(new double[] {ax[s], ay[s], az[s]}, turn(s), moment(s));
             for (int a = 0; a < 3; a++) {

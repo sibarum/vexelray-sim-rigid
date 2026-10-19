@@ -14,8 +14,11 @@ import java.util.Map;
  * A whole {@link Boxes} step as data, as {@code SphereStep} is for spheres: which kernel, over which named buffers,
  * with how many invocations, in order. Nothing here runs anything.
  *
- * <p>So far a substep is only {@link Boxes#predict}: nothing touches a box yet. The parameters' {@code h} is the
- * substep, so a step advances {@code substeps · h} seconds.
+ * <p>A substep is {@link Boxes#predict}, then {@link Boxes#walls}, then {@link Boxes#velocity}: boxes meet the walls
+ * and not yet each other. {@code oqx} to {@code oqw} hold how each box was turned when the substep began, {@code dx}
+ * to {@code jz} what the walls moved it by and the angular impulse they gave it, and {@code lambda} and {@code rub}
+ * each corner's normal and tangential impulse against each wall this substep. The parameters' {@code h} is the substep, so a step
+ * advances {@code substeps · h} seconds.
  */
 public final class BoxStep implements Buffered {
 
@@ -39,12 +42,19 @@ public final class BoxStep implements Buffered {
         java.util.Arrays.fill(identity, Float.floatToRawIntBits(1));
         constants.put("qw", identity);
         buffers.put("params", new BufferSpec("params", Body.F32, Boxes.PARAM_COUNT));
+        buffers.put("lambda", new BufferSpec("lambda", Body.F32, Boxes.LAMBDA_WORDS * boxes));
+        buffers.put("rub", new BufferSpec("rub", Body.F32, Boxes.RUB_WORDS * boxes));
 
         Pass predict = new Pass("predict", Boxes.predict(), Boxes.PREDICT_BUFFERS, List.of(Boxes.PREDICT_NAMES),
                 boxes);
+        Pass walls = new Pass("walls", Boxes.walls(), Boxes.WALLS_BUFFERS, List.of(Boxes.WALLS_NAMES), boxes);
+        Pass velocity = new Pass("velocity", Boxes.velocity(), Boxes.VELOCITY_BUFFERS,
+                List.of(Boxes.VELOCITY_NAMES), boxes);
         List<Pass> passes = new ArrayList<>();
         for (int sub = 0; sub < substeps; sub++) {
             passes.add(predict);
+            passes.add(walls);
+            passes.add(velocity);
         }
         step = List.copyOf(passes);
     }

@@ -1,8 +1,8 @@
 # Boxes: a contact manifold, and stacking measured
 
-Planned on 2026-10-19. Stage 1 is built; the rest is not yet. The plan follows the sphere work: each stage is built far enough to
-be measured against a known answer, and records what it found under its own heading. Where a measurement changes the
-plan, the stage says how.
+Planned on 2026-10-19. Stages 1 and 2 are built; the rest is not yet. The plan follows the sphere work: each stage is
+built far enough to be measured against a known answer, and records what it found under its own heading. Where a
+measurement changes the plan, the stage says how.
 
 ## What it is for
 
@@ -98,16 +98,48 @@ When contacts come, they add to `L`.
 The flip is a sharp test. The nudge leaves the spin 8e-5 of `M²` from the separatrix, and the period depends on the
 logarithm of that distance. With the predict that drifted by 1e-4 in energy, the flips were 1–2% off.
 
-### 2. A box against the walls
+### 2. A box against the walls — built, measured (2026-10-19)
 
-The eight corners are each tested against each wall, giving up to four points a wall. They are solved like the
-spheres' walls, in the substep's wall pass.
+`Boxes.walls` and `Boxes.velocity`, after `predict` in each substep. One invocation per box. Each of its eight
+corners is a contact with each of the six walls, found every substep: a corner is already an anchor in the box's
+own frame, so the walls need nothing found once a step.
 
-Known answers, with gravity tilted for a slope as `FrictionTest` does:
-- A box dropped flat rests flat: no tilt, no drift, its moving energy falling below 1e-6 J.
-- A box dropped on a corner or an edge settles onto a face.
-- On a slope a box stays put while `μ ≥ tan θ`, and slides at `g (sin θ − μ cos θ)` when `μ` is less.
-- A tall box on a high-friction slope tips over when `tan θ > width / height`, before it slides.
+- **Normals.** A corner outside a wall is corrected by its depth over the generalised inverse mass,
+  `w = im + (r × n)ᵀ I⁻¹ (r × n)`, so a push off-centre turns the box as well as moving it. The corners are swept
+  `passes` times. Each keeps the normal impulse it has taken this substep (`lambda`), and the whole is kept from going
+  below zero, as sequential impulses do.
+- **Friction, once every normal is done.** A corner's slip since the substep began is removed by a tangential impulse.
+  Each corner keeps the whole tangential impulse it has taken this substep (`rub`), held to `μs λₙ` or cut to
+  `μk λₙ` past it, and only the change is applied, over the same number of sweeps.
+- **Velocity.** Every move and every angular impulse `r × p` is added up as it is computed. `velocity` adds them as
+  `v += d / h` and `L += j / h`.
+
+`BoxWallTest`, both backends, 10 substeps, 4 sweeps:
+
+| Case | Known answer | Measured |
+| --- | --- | --- |
+| A 0.2 × 0.1 × 0.2 m box dropped 1 cm flat, μ = 0.5 | rests flat where it fell | tilt 1.2e-7 rad, drift 6e-8 m, 1e-11 J |
+| A 0.1 × 0.2 × 0.4 m box dropped from 0.3 m on a corner | settles on a face | on its widest, tilt 3e-7 rad, 4e-11 J |
+| Flat box, 20° slope, μ = 0.5 > tan θ | stays put | settles 6e-6 m down, then 1e-6 m in 2 s on the CPU, none on the GPU |
+| Flat box, 30° slope, μ = 0.3 < tan θ | slides at `g (sin θ − μ cos θ)` = 2.3563 m/s² | 2.3563 m/s² |
+| A 0.1 × 0.4 × 0.1 m box, μ = 1 | tips at `tan θ = 0.25`, 14.04° | stands at 12° and 13.5°, falls at 16° |
+
+**Sweeps.** At 1 sweep a box resting flat sits 6 µm low and tilts 1e-4 rad, and one on the 20° slope creeps 1.3 mm in
+2 s. At 2 sweeps the creep is 0.14 mm; at 4 it is gone, and at 8 the tilt falls to 5e-9 rad. Four is the default.
+
+Two faults found on the way, each like one the spheres had:
+
+1. **One friction sweep, each corner clamping its own share, let a box creep down a slope** at 6e-4 m/s. Each
+   corner's push turned the box, and left slip at the corners already rubbed. The fix was the spheres' first fix:
+   keep the whole tangential impulse a corner has taken, clamp the whole, and sweep more than once.
+2. **The slip was the difference of two positions.** A corner's travel as `(x + r) − (x₀ + r₀)` keeps only what f32
+   holds of a position a metre from the origin. The box on the slope crept at 1.5e-5 m/s, a fifth of an ulp a
+   substep, on both backends. The centre's travel is now `h v` plus the moves, added up as computed, and only the turn's
+   part, `r − r₀`, is a difference, of two short vectors. That is the spheres' velocity finding again, for friction.
+
+A box sliding down the 30° slope leans 8.5e-5 rad while it slides. Every substep it sinks `h² g` into the floor
+before the corners are corrected, and the corners are not corrected evenly, because the friction under the box tips
+it forward. The lean is that unevenness, and it goes when the box stops.
 
 ### 3. The picture, and the demo
 
