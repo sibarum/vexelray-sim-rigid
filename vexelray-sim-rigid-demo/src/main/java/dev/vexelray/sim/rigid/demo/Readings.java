@@ -6,6 +6,7 @@ import dev.vexelray.gui.core.layout.LayoutEnums.Direction;
 import dev.vexelray.gui.core.layout.Length;
 import dev.vexelray.gui.core.style.Role;
 import dev.vexelray.sim.core.gui.DemoLook;
+import dev.vexelray.sim.rigid.box.Boxes;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
 import sibarum.kronometer.Dilated;
 
@@ -65,8 +66,19 @@ final class Readings {
             set(Line.TIME, "Building the kernels…");
             return;
         }
-        set(Line.TIME, String.format("%s %.2f s simulated · %d spheres · %d×%d per step", paused ? "Paused at" : "",
-                r.simulated(), r.spheres(), r.substeps(), r.iterations()).trim());
+        boolean boxes = r.scenario().boxes();
+        set(Line.TIME, String.format("%s %.2f s simulated · %d %s · %d×%d per step", paused ? "Paused at" : "",
+                r.simulated(), r.bodies(), boxes ? "boxes" : "spheres", r.substeps(), r.iterations()).trim());
+        if (boxes) {
+            set(Line.OVERLAP, "Boxes meet the walls; each other, not yet");
+            set(Line.ENERGY, r.boxState() == null ? "" : String.format("Moving energy     %.2e J (%.2e turning)",
+                    r.boxState().kinetic(), r.boxState().rotational()));
+            set(Line.SPEED, r.boxState() == null ? "" : String.format("Fastest box       %.3f m/s", r.boxFastest()));
+            set(Line.SOLVE, String.format("Walls             corners swept %d times a substep", Boxes.WALL_PASSES));
+            set(Line.COST, String.format("Step %.2f ms (GPU %.2f) · hand-back %.2f · picture %.2f",
+                    r.stepMillis(), r.gpuMillis(), r.handBackMillis(), drawMillis));
+            return;
+        }
         if (r.state() != null) {
             set(Line.OVERLAP, String.format("Deepest overlap   %5.1f%% of a radius", 100 * r.state().maxOverlap()));
             set(Line.ENERGY, String.format("Moving energy     %.2e J", r.state().kinetic()));

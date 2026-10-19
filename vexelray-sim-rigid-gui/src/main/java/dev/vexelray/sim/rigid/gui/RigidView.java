@@ -9,7 +9,8 @@ import dev.vexelray.vulkan.present.GraphicsPipeline;
 import dev.vexelray.vulkan.present.SampledColorTarget;
 
 /**
- * Spheres on screen, ray-traced straight from a finished step into a target a node shows.
+ * Spheres or boxes on screen, ray-traced straight from a finished step into a target a node shows: by
+ * {@link SphereShader} or {@link BoxShader}, as the ring's generation says what its slots hold.
  *
  * <p>The state is never copied to the host for this: the view binds the ring slot ({@link ShownRing}) the newest
  * finished step was kept in, and reads it where it is, so the cost of the picture is one fullscreen pass. That works
@@ -20,17 +21,18 @@ import dev.vexelray.vulkan.present.SampledColorTarget;
  * <p>The camera is an {@link Orbit}, of a box scaled so its longest side is two units across and centred on the
  * origin; this view turns that into the simulation's own coordinates, in metres, and the shader works there.
  *
- * <p>Main thread only, as Vulkan is. The target is minted by the application, which closes it; the pipeline and the
- * binding are this view's.
+ * <p>Main thread only, as Vulkan is. The target is minted by the application, which closes it; the pipelines, one a
+ * shape made as it is first drawn, and the bindings are this view's.
  */
-public final class SphereView implements AutoCloseable {
+public final class RigidView implements AutoCloseable {
 
     private final Node node;
     private final int pixels;
     private final Orbit orbit;
 
     private SampledColorTarget target;
-    private GraphicsPipeline pipeline;
+    private final java.util.EnumMap<ShownRing.Shape, GraphicsPipeline> pipelines =
+            new java.util.EnumMap<>(ShownRing.Shape.class);
     /** The bindings of the generation drawn last, one a slot, made as each slot is first drawn. */
     private final BoundStorageBuffer[] slots = new BoundStorageBuffer[ShownRing.SLOTS];
     private long generation;
@@ -40,21 +42,22 @@ public final class SphereView implements AutoCloseable {
      * @param pixels the side of the square target
      * @param orbit  the camera, which something else turns
      */
-    public SphereView(Node node, int pixels, Orbit orbit) {
+    public RigidView(Node node, int pixels, Orbit orbit) {
         this.node = node;
         this.pixels = pixels;
         this.orbit = orbit;
     }
 
     /**
-     * Draws {@code frame}'s step, each sphere blended {@code alpha} of the way from where the step before it left the
-     * sphere to where it did. Waits for the draw, as {@code renderInto} does, and for nothing else: the step's
+     * Draws {@code frame}'s step, each body blended {@code alpha} of the way from where the step before it left the
+     * body to where it did. Waits for the draw, as {@code renderInto} does, and for nothing else: the step's
      * timeline has already reached the value the draw waits for.
      *
-     * @param squash how much each sphere is squashed by what presses it, as {@link SphereShader#push} takes it
+     * @param squash how much each sphere is squashed by what presses it, as {@link Picture#push} takes it
      */
     public void show(GuiApp app, ShownRing.Frame frame, float alpha, double squash) {
         BoundStorageBuffer slot = bind(app, frame);
+        GraphicsPipeline pipeline = pipeline(frame.generation().shape(), slot);
         ShownRing.Generation g = frame.generation();
         double[] extent = {g.extent(0), g.extent(1), g.extent(2)};
         double longest = Math.max(extent[0], Math.max(extent[1], extent[2]));
@@ -67,7 +70,7 @@ public final class SphereView implements AutoCloseable {
         // right looking down +z. The other sign mirrors the picture, and a drag then seems to turn the wrong way.
         double[] right = normalise(forward[2], 0, -forward[0]);
         double[] up = cross(forward, right);
-        byte[] push = SphereShader.push(eye, right, up, forward, 1.0, alpha, g.spheres(), extent, squash);
+        byte[] push = Picture.push(eye, right, up, forward, 1.0, alpha, g.bodies(), extent, squash);
         target.renderInto(pipeline, 0L, slot.descriptorSet(), 3, push, 0f, 0f, 0f, 1f, g.timeline(), frame.step());
     }
 
@@ -97,12 +100,15 @@ public final class SphereView implements AutoCloseable {
                     SphereShader.SHOWN_BINDING);
             slots[frame.slot()] = slot;
         }
-        if (pipeline == null) {
-            pipeline = target.pipelineFor(Fullscreen.triangleVertexWithUvSpirv(), Fullscreen.ENTRY_POINT,
-                    SphereShader.fragmentSpirv(), "main", SphereShader.PUSH_BYTES,
-                    new long[] {slot.descriptorSetLayout()});
-        }
         return slot;
+    }
+
+    /** The pipeline that draws {@code shape}, made the first time that shape is drawn. */
+    private GraphicsPipeline pipeline(ShownRing.Shape shape, BoundStorageBuffer slot) {
+        return pipelines.computeIfAbsent(shape, s -> target.pipelineFor(Fullscreen.triangleVertexWithUvSpirv(),
+                Fullscreen.ENTRY_POINT, s == ShownRing.Shape.BOXES ? BoxShader.fragmentSpirv()
+                        : SphereShader.fragmentSpirv(), "main", Picture.PUSH_BYTES,
+                new long[] {slot.descriptorSetLayout()}));
     }
 
     private void dropSlots() {
@@ -123,13 +129,13 @@ public final class SphereView implements AutoCloseable {
         return new double[] {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
     }
 
-    /** Releases the pipeline and the bindings. The target is the application's. */
+    /** Releases the pipelines and the bindings. The target is the application's. */
     @Override
     public void close() {
-        if (pipeline != null) {
+        for (GraphicsPipeline pipeline : pipelines.values()) {
             pipeline.close();
-            pipeline = null;
         }
+        pipelines.clear();
         dropSlots();
     }
 }

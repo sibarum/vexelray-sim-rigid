@@ -9,8 +9,13 @@ import dev.vexelray.sim.core.gui.AppCompute;
 import dev.vexelray.sim.rigid.demo.Messages.Build;
 import dev.vexelray.sim.rigid.demo.Messages.Next;
 import dev.vexelray.sim.rigid.demo.Messages.Relax;
+import dev.vexelray.sim.rigid.box.BoxDiagnostics;
+import dev.vexelray.sim.rigid.box.BoxStep;
+import dev.vexelray.sim.rigid.box.Boxes;
+import dev.vexelray.sim.rigid.gui.BoxSimulation;
 import dev.vexelray.sim.rigid.gui.ShownRing;
-import dev.vexelray.sim.rigid.gui.SphereRunner;
+import dev.vexelray.sim.rigid.gui.RigidRunner;
+import dev.vexelray.sim.rigid.gui.RigidSimulation;
 import dev.vexelray.sim.rigid.gui.SphereSimulation;
 import dev.vexelray.sim.rigid.sphere.SphereDiagnostics;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
@@ -20,7 +25,7 @@ import sibarum.kronometer.Dilated;
 
 /**
  * The physics, on a lane of its own: it makes the simulation, on whichever backend the user chose, runs its steps back
- * to back, and keeps each finished step in the {@link ShownRing} for the frame to draw ({@link SphereRunner}).
+ * to back, and keeps each finished step in the {@link ShownRing} for the frame to draw ({@link RigidRunner}).
  *
  * <h2>The frame never waits for it</h2>
  *
@@ -48,8 +53,6 @@ final class Physics implements AutoCloseable {
     /** The world's step, in its own time. */
     static final double STEP_SECONDS = 1.0 / 60;
 
-    private static final double GRAVITY = -9.81;
-
     /** Steps owed past which the world's clock forgives them, and the world slows, rather than catch up in a burst. */
     static final int MOST_BEHIND = 2;
 
@@ -60,10 +63,13 @@ final class Physics implements AutoCloseable {
     private final Atchung bus;
     private final Dilated world;
     private final GpuContext context;
-    private final SphereRunner runner;
+    private final RigidRunner runner;
     private final String noQueue;
 
-    private SphereSimulation sim;
+    /** The running simulation, and the same as one of the two kinds it is, the other null. */
+    private RigidSimulation sim;
+    private SphereSimulation spheres;
+    private BoxSimulation boxes;
     private Scenario.State state;
     private Scenario scenario = Scenario.BIG_PILE;
     private long steps;
@@ -82,6 +88,8 @@ final class Physics implements AutoCloseable {
     private double waits;
     private long unlisted;
     private SphereDiagnostics read;
+    private BoxDiagnostics boxRead;
+    private double boxFastest;
 
     Physics(ComputeQueue queue, ShownRing ring, PhysicsNews news, Atchung bus, Dilated world) {
         this.news = news;
@@ -90,12 +98,12 @@ final class Physics implements AutoCloseable {
         // On the timeline, as a step comes due: a sample, so a burst of them is one wake.
         world.onDue(() -> bus.publish(Messages.NEXT_TOPIC, new Next()));
         this.context = AppCompute.on(queue).orElse(null);
-        this.runner = context == null ? null : new SphereRunner(context, ring);
+        this.runner = context == null ? null : new RigidRunner(context, ring);
         this.noQueue = context == null
                 ? "No compute queue of its own (" + queue.why() + "), so there is no physics to draw." : "";
         if (context == null) {
             news.report(new PhysicsNews.Report(scenario, false, 0, 0, 0, 0, null, 0, 0, 0, "",
-                    SphereStep.Solve.JACOBI, 0, 0, 0, noQueue));
+                    SphereStep.Solve.JACOBI, 0, 0, 0, noQueue, null, 0));
         }
     }
 
@@ -105,7 +113,7 @@ final class Physics implements AutoCloseable {
         if (runner == null) {
             return;
         }
-        boolean carry = b.carry() && sim != null && b.scenario() == scenario;
+        boolean carry = b.carry() && spheres != null && b.scenario() == scenario && !scenario.boxes();
         Scenario.State from = carry ? current() : b.scenario().start();
         scenario = b.scenario();
         omega = b.omega();
@@ -114,23 +122,21 @@ final class Physics implements AutoCloseable {
         friction = b.friction();
         rolling = b.rolling();
         news.report(PhysicsNews.Report.waiting(scenario));
-        SphereStep step = new SphereStep(from.n, b.substeps(), b.iterations(), from.grid(), b.solve());
-        SphereRunner.Backend backend = b.backend();
+        RigidRunner.Backend backend = b.backend();
         try {
-            sim = runner.install(step, backend, from.extent, s -> s.start(from.x, from.y, from.z, from.u, from.v,
-                    from.w, from.r, from.im, params(b.substeps(), from)));
+            install(from, b, backend);
             problem = "";
         } catch (IllegalStateException none) {
             // No such device here: say so, and run where the picture is instead.
             problem = backend.label + " is not here (" + none.getMessage() + "), so this runs on this GPU.";
-            sim = runner.install(step, SphereRunner.Backend.QUEUE, from.extent, s -> s.start(from.x, from.y,
-                    from.z, from.u, from.v, from.w, from.r, from.im, params(b.substeps(), from)));
+            install(from, b, RigidRunner.Backend.QUEUE);
         }
         state = from;
         if (!carry) {
             simulated = 0;
         }
         read = null;
+        boxRead = null;
         stepMillis = gpuMillis = handBackMillis = rounds = waits = 0;
         unlisted = 0;
         world.discard();                // the steps owed while it was made are not this one's to run
@@ -145,8 +151,10 @@ final class Physics implements AutoCloseable {
         restitution = r.restitution();
         friction = r.friction();
         rolling = r.rolling();
-        if (sim != null) {
-            sim.params(params(sim.substeps(), state));
+        if (spheres != null) {
+            spheres.params(params(spheres.substeps(), state));
+        } else if (boxes != null) {
+            boxes.params(boxParams(boxes.substeps(), state));
         }
     }
 
@@ -157,7 +165,7 @@ final class Physics implements AutoCloseable {
     @Subscribe(topic = Messages.NEXT, overflow = Overflow.COALESCE_LATEST)
     public void step(Next n) {
         if (sim != null && world.take()) {
-            SphereRunner.Kept kept = runner.step();
+            RigidRunner.Kept kept = runner.step();
             world.finished(kept.finishedNanos());
             steps++;
             simulated += STEP_SECONDS;
@@ -168,12 +176,46 @@ final class Physics implements AutoCloseable {
             waits = average(waits, kept.step().solve().waits());
             unlisted += kept.step().solve().unlisted();
             if (steps % READ_EVERY == 0) {
-                float[][] now = sim.state();
-                read = SphereDiagnostics.of(now[0], now[1], now[2], now[3], now[4], now[5], now[6], now[7], now[8],
-                        state.r, state.im, GRAVITY, state.extent[0], state.extent[1], state.extent[2]);
+                readBack();
             }
             report();
             bus.publish(Messages.NEXT_TOPIC, new Next());
+        }
+    }
+
+    /** A simulation of {@code from}, spheres or boxes as it holds, made on {@code backend} and started. */
+    private void install(Scenario.State from, Build b, RigidRunner.Backend backend) {
+        if (from.boxes) {
+            BoxStep step = new BoxStep(from.n, b.substeps());
+            spheres = null;
+            boxes = runner.install(step, backend, from.extent, s -> s.start(from.x, from.y, from.z, from.u, from.v,
+                    from.w, from.spin, from.q, from.half, from.im, boxParams(b.substeps(), from)));
+            sim = boxes;
+        } else {
+            SphereStep step = new SphereStep(from.n, b.substeps(), b.iterations(), from.grid(), b.solve());
+            boxes = null;
+            spheres = runner.install(step, backend, from.extent, s -> s.start(from.x, from.y, from.z, from.u,
+                    from.v, from.w, from.r, from.im, params(b.substeps(), from)));
+            sim = spheres;
+        }
+    }
+
+    /** The state read back for the readings: a wait, so only every {@link #READ_EVERY} steps. */
+    private void readBack() {
+        if (spheres != null) {
+            float[][] now = spheres.state();
+            read = SphereDiagnostics.of(now[0], now[1], now[2], now[3], now[4], now[5], now[6], now[7], now[8],
+                    state.r, state.im, state.gravity, state.extent[0], state.extent[1], state.extent[2]);
+            return;
+        }
+        float[][] now = boxes.state();
+        boxRead = BoxDiagnostics.of(now[0], now[1], now[2], now[3], now[4], now[5],
+                new float[][] {now[6], now[7], now[8]}, new float[][] {now[9], now[10], now[11], now[12]},
+                state.half, state.im);
+        boxFastest = 0;
+        for (int k = 0; k < state.n; k++) {
+            boxFastest = Math.max(boxFastest, Math.sqrt(now[3][k] * now[3][k] + now[4][k] * now[4][k]
+                    + now[5][k] * now[5][k]));
         }
     }
 
@@ -182,14 +224,16 @@ final class Physics implements AutoCloseable {
     }
 
     private void report() {
-        news.report(new PhysicsNews.Report(scenario, false, sim.spheres(), sim.substeps(), sim.iterations(),
-                simulated, read, stepMillis, gpuMillis, handBackMillis, sim.where(), sim.solve(), rounds, waits,
-                unlisted, problem));
+        boolean box = boxes != null;
+        news.report(new PhysicsNews.Report(scenario, false, sim.bodies(), box ? boxes.substeps() : spheres.substeps(),
+                box ? 1 : spheres.iterations(), simulated, read, stepMillis, gpuMillis, handBackMillis, sim.where(),
+                box ? SphereStep.Solve.JACOBI : spheres.solve(), rounds, waits, unlisted, problem, boxRead,
+                boxFastest));
     }
 
     /** The running simulation's state now, as a start for one of another shape. */
     private Scenario.State current() {
-        float[][] now = sim.state();
+        float[][] now = spheres.state();
         Scenario.State s = new Scenario.State(state.n, state.extent[0], state.extent[1], state.extent[2]);
         System.arraycopy(now[0], 0, s.x, 0, s.n);
         System.arraycopy(now[1], 0, s.y, 0, s.n);
@@ -202,8 +246,14 @@ final class Physics implements AutoCloseable {
         return s;
     }
 
+    /** Boxes' parameters: the friction control as both coefficients, and the walls' default sweeps. */
+    private int[] boxParams(int substeps, Scenario.State s) {
+        return Boxes.params(STEP_SECONDS / substeps, 0, s.gravity, 0, s.extent[0], s.extent[1], s.extent[2], friction,
+                friction, Boxes.WALL_PASSES);
+    }
+
     private int[] params(int substeps, Scenario.State s) {
-        return Spheres.params(STEP_SECONDS / substeps, 0, GRAVITY, 0, s.extent[0], s.extent[1], s.extent[2], omega,
+        return Spheres.params(STEP_SECONDS / substeps, 0, s.gravity, 0, s.extent[0], s.extent[1], s.extent[2], omega,
                 averaged, restitution, friction, friction, rolling);
     }
 

@@ -6,7 +6,7 @@ import dev.vexelray.gui.core.app.GuiApp;
 import dev.vexelray.sim.rigid.demo.Messages.Build;
 import dev.vexelray.sim.rigid.demo.Messages.Relax;
 import dev.vexelray.sim.rigid.gui.ShownRing;
-import dev.vexelray.sim.rigid.gui.SphereRunner;
+import dev.vexelray.sim.rigid.gui.RigidRunner;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
 import sibarum.atchung.Atchung;
 import sibarum.kronometer.Dilated;
@@ -51,7 +51,7 @@ final class Session implements AutoCloseable {
     private Controls.Solver solver;
     private int substeps;
     private int iterations;
-    private SphereRunner.Backend backend;
+    private RigidRunner.Backend backend;
     private SphereStep.Solve solve;
     private double restitution;
     private double friction;
@@ -120,7 +120,7 @@ final class Session implements AutoCloseable {
         Scenario wantedScenario = controls.scenario();
         int wantedSubsteps = controls.substeps();
         int wantedIterations = controls.iterations();
-        SphereRunner.Backend wantedBackend = controls.backend();
+        RigidRunner.Backend wantedBackend = controls.backend();
         SphereStep.Solve wantedSolve = controls.solve();
         if (reset || wantedScenario != scenario || wantedSubsteps != substeps || wantedIterations != iterations
                 || wantedBackend != backend || wantedSolve != solve) {

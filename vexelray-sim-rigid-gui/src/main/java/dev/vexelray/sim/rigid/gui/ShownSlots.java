@@ -23,7 +23,7 @@ import java.util.List;
  *   <li><b>Beside it</b> ({@link #beside}): the simulation computes on the device the picture is drawn on, so a step
  *       is kept by a copy on the GPU, from its {@code shown} to a slot. Nothing crosses the bus.</li>
  *   <li><b>Elsewhere</b> ({@link #on}): on another GPU, or on the CPU. A step's {@code shown} is read back to the host
- *       and written here, eight floats a sphere, then copied into the slot on this device. That round trip is what
+ *       and written here, then copied into the slot on this device. That round trip is what
  *       running elsewhere costs, and it is measured.</li>
  * </ul>
  *
@@ -34,7 +34,8 @@ public final class ShownSlots implements AutoCloseable {
 
     private final Accelerator accelerator;
     private final boolean ownsAccelerator;
-    private final int spheres;
+    private final ShownRing.Shape shape;
+    private final int bodies;
     /** What a slot is copied from: the simulation's {@code shown}, or the buffer the host writes it into. */
     private final ResidentBuffer source;
     private final ResidentBuffer incoming;
@@ -43,11 +44,12 @@ public final class ShownSlots implements AutoCloseable {
     private final KernelHandle keeper;
     private final GpuContext.Timeline timeline;
 
-    private ShownSlots(Accelerator accelerator, boolean ownsAccelerator, int spheres, ResidentBuffer shown) {
+    private ShownSlots(Accelerator accelerator, boolean ownsAccelerator, ShownRing.Shape shape, int bodies, int words,
+                       ResidentBuffer shown) {
         this.accelerator = accelerator;
         this.ownsAccelerator = ownsAccelerator;
-        this.spheres = spheres;
-        int words = Spheres.SHOWN_STRIDE * spheres;
+        this.shape = shape;
+        this.bodies = bodies;
         this.incoming = shown == null ? accelerator.allocate(Body.F32, words) : null;
         this.source = shown != null ? shown : incoming;
         this.keeper = accelerator.register(new KernelSpec(Spheres.keep(), List.of(
@@ -62,20 +64,20 @@ public final class ShownSlots implements AutoCloseable {
     }
 
     /** Slots on the device {@code sim} computes on, kept by a copy there. {@code sim} must be on a GPU. */
-    public static ShownSlots beside(SphereSimulation sim) {
+    public static ShownSlots beside(RigidSimulation sim) {
         if (sim.shown() == null) {
             throw new IllegalArgumentException("a simulation on the CPU has no device to keep its steps beside; "
                     + "use ShownSlots.on the device the picture is drawn on");
         }
-        return new ShownSlots(sim.accelerator(), false, sim.spheres(), sim.shown());
+        return new ShownSlots(sim.accelerator(), false, sim.shape(), sim.bodies(), sim.shownWords(), sim.shown());
     }
 
     /**
-     * Slots on {@code render}, the device the picture is drawn on, for a simulation of {@code spheres} spheres that
-     * runs anywhere else: each step is handed through the host.
+     * Slots on {@code render}, the device the picture is drawn on, for {@code sim}, which runs anywhere else: each
+     * step is handed through the host.
      */
-    public static ShownSlots on(GpuContext render, int spheres) {
-        return new ShownSlots(Accelerator.on(render), true, spheres, null);
+    public static ShownSlots on(GpuContext render, RigidSimulation sim) {
+        return new ShownSlots(Accelerator.on(render), true, sim.shape(), sim.bodies(), sim.shownWords(), null);
     }
 
     /** Whether a step gets here through the host, as it does from another device or the CPU. */
@@ -89,7 +91,7 @@ public final class ShownSlots implements AutoCloseable {
      *
      * @return the copy's completion: the step is the picture's to take once it is done
      */
-    public Completion keep(int slot, long value, SphereSimulation sim) {
+    public Completion keep(int slot, long value, RigidSimulation sim) {
         if (incoming != null) {
             incoming.write(sim.readShown());
         }
@@ -107,7 +109,7 @@ public final class ShownSlots implements AutoCloseable {
         for (int k = 0; k < slots.length; k++) {
             handles[k] = slots[k].vkBuffer();
         }
-        return new ShownRing.Generation(id, handles, timeline.handle(), spheres, extent);
+        return new ShownRing.Generation(id, handles, timeline.handle(), shape, bodies, extent);
     }
 
     /** Waits for what is in flight, then frees the slots and the timeline. Before the simulation it is beside. */

@@ -20,7 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ShownRingTest {
 
     private static ShownRing.Generation generation(long id) {
-        return new ShownRing.Generation(id, new long[] {10 * id, 10 * id + 1, 10 * id + 2}, 99, 4,
+        return new ShownRing.Generation(id, new long[] {10 * id, 10 * id + 1, 10 * id + 2}, 99,
+                ShownRing.Shape.SPHERES, 4,
                 new double[] {1, 2, 3});
     }
 

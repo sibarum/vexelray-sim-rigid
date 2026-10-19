@@ -1,5 +1,6 @@
 package dev.vexelray.sim.rigid.demo;
 
+import dev.vexelray.sim.rigid.box.BoxDiagnostics;
 import dev.vexelray.sim.rigid.sphere.SphereDiagnostics;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
 
@@ -16,7 +17,7 @@ final class PhysicsNews {
      *
      * @param scenario   what is running, or being built
      * @param building   whether a simulation is being made, the kernels lowered and compiled
-     * @param spheres    how many, for the running one
+     * @param bodies     how many spheres or boxes, for the running one
      * @param substeps   its substeps a step
      * @param iterations its iterations a substep
      * @param simulated  seconds of world time run since the scenario started, counted by its finished steps
@@ -30,14 +31,16 @@ final class PhysicsNews {
      * @param waits      times a step waited to learn whether its contacts were all solved, averaged
      * @param unlisted   contacts that did not fit the list, and so were not solved, since the build
      * @param problem    why there is no physics, or an empty string
+     * @param boxState   for boxes, the readings of the state as of the last time they were read back; null otherwise
+     * @param boxFastest for boxes, the fastest centre then, in metres a second
      */
-    record Report(Scenario scenario, boolean building, int spheres, int substeps, int iterations, double simulated,
+    record Report(Scenario scenario, boolean building, int bodies, int substeps, int iterations, double simulated,
                   SphereDiagnostics state, double stepMillis, double gpuMillis, double handBackMillis,
                   String where, SphereStep.Solve solve, double rounds, double waits, long unlisted,
-                  String problem) {
+                  String problem, BoxDiagnostics boxState, double boxFastest) {
 
         static Report waiting(Scenario scenario) {
-            return new Report(scenario, true, 0, 0, 0, 0, null, 0, 0, 0, "", SphereStep.Solve.JACOBI, 0, 0, 0, "");
+            return new Report(scenario, true, 0, 0, 0, 0, null, 0, 0, 0, "", SphereStep.Solve.JACOBI, 0, 0, 0, "", null, 0);
         }
     }
 

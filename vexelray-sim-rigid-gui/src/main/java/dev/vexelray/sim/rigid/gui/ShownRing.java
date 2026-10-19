@@ -39,16 +39,25 @@ public final class ShownRing {
     /** Slots in a ring. */
     public static final int SLOTS = 3;
 
+    /** What a ring's slots hold, which says how a picture draws them. */
+    public enum Shape {
+        /** {@code Spheres.SHOWN_STRIDE} floats a sphere. */
+        SPHERES,
+        /** {@code Boxes.SHOWN_STRIDE} floats a box. */
+        BOXES
+    }
+
     /**
      * One simulation's ring.
      *
      * @param id       counts up from one, a generation per simulation
      * @param slots    the {@code VkBuffer} of each slot, {@link #SLOTS} of them, on the application's device
      * @param timeline the {@code VkSemaphore}, of timeline type, a kept step signals
-     * @param spheres  how many spheres a slot holds
+     * @param shape    what a slot holds
+     * @param bodies   how many of them
      * @param extent   the box, {@code sx, sy, sz}, in metres
      */
-    public record Generation(long id, long[] slots, long timeline, int spheres, double[] extent) {
+    public record Generation(long id, long[] slots, long timeline, Shape shape, int bodies, double[] extent) {
 
         public Generation {
             if (slots.length != SLOTS) {

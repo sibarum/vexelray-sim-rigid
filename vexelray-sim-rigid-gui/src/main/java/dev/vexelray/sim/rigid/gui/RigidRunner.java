@@ -1,11 +1,14 @@
 package dev.vexelray.sim.rigid.gui;
 
 import dev.supirvast.vastir.tools.GpuContext;
+import dev.vexelray.sim.rigid.box.BoxStep;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
 
 import java.util.HashMap;
 import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * The stepping thread's side of a picture: a simulation on whichever backend was asked for, its steps kept in a
@@ -23,7 +26,7 @@ import java.util.function.Consumer;
  *
  * The same passes run on each, which is what lets one be measured against another.
  */
-public final class SphereRunner implements AutoCloseable {
+public final class RigidRunner implements AutoCloseable {
 
     /** Where a simulation runs. */
     public enum Backend {
@@ -51,10 +54,10 @@ public final class SphereRunner implements AutoCloseable {
 
     private final GpuContext render;
     private final ShownRing ring;
-    private final Map<Long, SphereSimulation> sims = new HashMap<>();
+    private final Map<Long, RigidSimulation> sims = new HashMap<>();
     private final Map<Long, ShownSlots> slotsOf = new HashMap<>();
     private GpuContext integrated;
-    private SphereSimulation sim;
+    private RigidSimulation sim;
     private ShownSlots slots;
     private long generation;
     private long kept;
@@ -63,7 +66,7 @@ public final class SphereRunner implements AutoCloseable {
      * @param render the picture's device, on the queue this thread was lent: where every ring lives, and where
      *               {@link Backend#QUEUE} simulations run
      */
-    public SphereRunner(GpuContext render, ShownRing ring) {
+    public RigidRunner(GpuContext render, ShownRing ring) {
         this.render = render;
         this.ring = ring;
     }
@@ -78,15 +81,27 @@ public final class SphereRunner implements AutoCloseable {
      */
     public SphereSimulation install(SphereStep step, Backend backend, double[] extent,
                                     Consumer<SphereSimulation> start) {
-        SphereSimulation made = switch (backend) {
-            case QUEUE -> new SphereSimulation(render, step);
-            case INTEGRATED -> new SphereSimulation(integrated(), step);
-            case CPU -> SphereSimulation.onCpu(step);
+        return install(backend, extent, start, context -> new SphereSimulation(context, step),
+                () -> SphereSimulation.onCpu(step));
+    }
+
+    /** As above, for boxes. */
+    public BoxSimulation install(BoxStep step, Backend backend, double[] extent, Consumer<BoxSimulation> start) {
+        return install(backend, extent, start, context -> new BoxSimulation(context, step),
+                () -> BoxSimulation.onCpu(step));
+    }
+
+    private <S extends RigidSimulation> S install(Backend backend, double[] extent, Consumer<S> start,
+                                                  Function<GpuContext, S> onGpu, Supplier<S> onCpu) {
+        S made = switch (backend) {
+            case QUEUE -> onGpu.apply(render);
+            case INTEGRATED -> onGpu.apply(integrated());
+            case CPU -> onCpu.get();
         };
         ShownSlots madeSlots;
         try {
             start.accept(made);
-            madeSlots = backend == Backend.QUEUE ? ShownSlots.beside(made) : ShownSlots.on(render, step.spheres);
+            madeSlots = backend == Backend.QUEUE ? ShownSlots.beside(made) : ShownSlots.on(render, made);
         } catch (RuntimeException | Error e) {
             made.close();
             throw e;
@@ -112,7 +127,7 @@ public final class SphereRunner implements AutoCloseable {
     }
 
     /** The running simulation, or null before the first {@link #install}. */
-    public SphereSimulation sim() {
+    public RigidSimulation sim() {
         return sim;
     }
 
@@ -138,7 +153,7 @@ public final class SphereRunner implements AutoCloseable {
         if (oldSlots != null) {
             oldSlots.close();
         }
-        SphereSimulation oldSim = sims.remove(id);
+        RigidSimulation oldSim = sims.remove(id);
         if (oldSim != null) {
             oldSim.close();
         }

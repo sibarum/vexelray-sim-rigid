@@ -12,8 +12,8 @@ implementation is chosen from the results. [docs/architecture.md](docs/architect
 
 | Module | What it holds |
 | --- | --- |
-| `vexelray-sim-rigid-core` | The kernels, in SupirVast IR, and the diagnostics that judge a state. No engine, no window. So far: spheres in a walled box, with position-based contact (XPBD, Jacobi or Gauss–Seidel) and restitution, substepped, and a grid broad phase. |
-| `vexelray-sim-rigid-gui` | The simulation on the stack: `SphereSimulation` steps it on resident buffers on the window's own GPU, every contact solved, and keeps each finished step in a `ShownRing`; `SphereView` ray-traces the spheres straight from the ring's newest slot, blended between that step and the one before. |
+| `vexelray-sim-rigid-core` | The kernels, in SupirVast IR, and the diagnostics that judge a state. No engine, no window. So far: spheres in a walled box, with position-based contact (XPBD, Jacobi or Gauss–Seidel) and restitution, substepped, and a grid broad phase; and boxes, which tumble and meet the walls with friction ([docs/boxes.md](docs/boxes.md)). |
+| `vexelray-sim-rigid-gui` | The simulation on the stack: `SphereSimulation` and `BoxSimulation` step it on resident buffers on the window's own GPU, and `RigidRunner` keeps each finished step in a `ShownRing`; `RigidView` ray-traces the spheres or boxes straight from the ring's newest slot, blended between that step and the one before. |
 | `vexelray-sim-rigid-demo` | A framework application: the scenarios, the solver's settings beside the readings they move. The physics is a `@Component` on a lane of its own, on the compute queue the application lends it, and the frame never waits for it. The clock is Kronometer's: a fixed 60 Hz rate inside a tempo the playback speed scales, whose due steps the frame counts for the physics lane to run. |
 
 It knows nothing of water. A body floating or pushed by a wake is

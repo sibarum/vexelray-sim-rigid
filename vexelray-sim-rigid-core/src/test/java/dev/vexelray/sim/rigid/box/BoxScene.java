@@ -161,6 +161,11 @@ final class BoxScene implements AutoCloseable {
         return this;
     }
 
+    /** The picture's buffer as it is on the backend now, {@link Boxes#SHOWN_STRIDE} floats a box. */
+    float[] shown() {
+        return runner.floats("shown");
+    }
+
     BoxDiagnostics diagnostics() {
         read();
         return BoxDiagnostics.of(x, y, z, u, v, w, l, q, half, im);

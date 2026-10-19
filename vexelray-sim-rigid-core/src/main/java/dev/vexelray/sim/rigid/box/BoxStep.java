@@ -17,8 +17,9 @@ import java.util.Map;
  * <p>A substep is {@link Boxes#predict}, then {@link Boxes#walls}, then {@link Boxes#velocity}: boxes meet the walls
  * and not yet each other. {@code oqx} to {@code oqw} hold how each box was turned when the substep began, {@code dx}
  * to {@code jz} what the walls moved it by and the angular impulse they gave it, and {@code lambda} and {@code rub}
- * each corner's normal and tangential impulse against each wall this substep. The parameters' {@code h} is the substep, so a step
- * advances {@code substeps · h} seconds.
+ * each corner's normal and tangential impulse against each wall this substep. Once at the end of a step,
+ * {@link Boxes#show} writes {@code shown}, for a picture, {@link Boxes#SHOWN_STRIDE} floats a box. The parameters'
+ * {@code h} is the substep, so a step advances {@code substeps · h} seconds.
  */
 public final class BoxStep implements Buffered {
 
@@ -44,6 +45,7 @@ public final class BoxStep implements Buffered {
         buffers.put("params", new BufferSpec("params", Body.F32, Boxes.PARAM_COUNT));
         buffers.put("lambda", new BufferSpec("lambda", Body.F32, Boxes.LAMBDA_WORDS * boxes));
         buffers.put("rub", new BufferSpec("rub", Body.F32, Boxes.RUB_WORDS * boxes));
+        buffers.put("shown", new BufferSpec("shown", Body.F32, Boxes.SHOWN_STRIDE * boxes));
 
         Pass predict = new Pass("predict", Boxes.predict(), Boxes.PREDICT_BUFFERS, List.of(Boxes.PREDICT_NAMES),
                 boxes);
@@ -56,6 +58,7 @@ public final class BoxStep implements Buffered {
             passes.add(walls);
             passes.add(velocity);
         }
+        passes.add(new Pass("show", Boxes.show(), Boxes.SHOW_BUFFERS, List.of(Boxes.SHOW_NAMES), boxes));
         step = List.copyOf(passes);
     }
 

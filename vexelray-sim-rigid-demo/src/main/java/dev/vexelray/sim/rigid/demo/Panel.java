@@ -10,7 +10,7 @@ import dev.vexelray.gui.widget.Inspector;
 import dev.vexelray.sim.core.gui.DemoLook;
 import dev.vexelray.sim.core.gui.Pick;
 import dev.vexelray.sim.rigid.demo.Controls.Solver;
-import dev.vexelray.sim.rigid.gui.SphereRunner;
+import dev.vexelray.sim.rigid.gui.RigidRunner;
 
 import java.util.List;
 
@@ -60,7 +60,7 @@ final class Panel {
                         controls::speed),
                 new Pick<>("Picture", "Squash", Controls.SQUASHES, g -> g == 0 ? "None" : g + "×",
                         controls::squash, controls::squash),
-                new Pick<>("Running", "Runs on", List.of(SphereRunner.Backend.values()), b -> b.label,
+                new Pick<>("Running", "Runs on", List.of(RigidRunner.Backend.values()), b -> b.label,
                         controls::backend, controls::backend));
 
         Node heading = gui.text("Readings").font(DemoLook.UI).textSize(DemoLook.HEADING)

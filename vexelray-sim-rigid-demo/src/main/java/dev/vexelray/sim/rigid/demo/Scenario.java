@@ -77,7 +77,38 @@ enum Scenario {
         State start() {
             return block(10, 0.025, 0.05, 0.6, 1.8);
         }
+    },
+
+    SPINNING_BOX("Spinning box", "A box with no gravity, spun at 5 rad/s about its middle axis and nudged at 0.1 rad/s"
+            + " about its shortest. A spin about the middle axis is not stable: the box turns over and back, every"
+            + " 3.4 s, the period the closed form gives. Boxes take only the substeps and friction controls.") {
+        @Override
+        State start() {
+            State s = State.boxes(1, 1.2, 1.2, 1.2, 0);
+            s.box(0, 0.6, 0.6, 0.6, 0.075, 0.15, 0.3, 1, IDENTITY, new double[] {0, 5, 0.1});
+            return s;
+        }
+    },
+
+    DROPPED_BOXES("Dropped boxes", "Six boxes of different shapes, each turned and dropped onto a corner."
+            + " Each settles onto a face; with friction they stop where they land. They do not meet each other yet:"
+            + " only the walls. Boxes take only the substeps and friction controls.") {
+        @Override
+        State start() {
+            double[][] halves = {{0.05, 0.05, 0.05}, {0.04, 0.08, 0.12}, {0.1, 0.03, 0.06}, {0.03, 0.12, 0.03},
+                    {0.07, 0.07, 0.02}, {0.05, 0.09, 0.07}};
+            State s = State.boxes(halves.length, 1.8, 1.2, 0.6, -9.81);
+            Random random = new Random(5);
+            for (int k = 0; k < halves.length; k++) {
+                double[] axis = {random.nextDouble() - 0.5, random.nextDouble() - 0.5, random.nextDouble() - 0.5};
+                s.box(k, 0.2 + 0.28 * k, 0.4 + 0.08 * k, 0.3, halves[k][0], halves[k][1], halves[k][2], 0.5,
+                        axisAngle(axis, 0.6 + 0.3 * k), new double[3]);
+            }
+            return s;
+        }
     };
+
+    private static final double[] IDENTITY = {0, 0, 0, 1};
 
     final String label;
     final String about;
@@ -88,6 +119,11 @@ enum Scenario {
     }
 
     abstract State start();
+
+    /** Whether its bodies are boxes, which take only the substeps and friction controls. */
+    boolean boxes() {
+        return this == SPINNING_BOX || this == DROPPED_BOXES;
+    }
 
     /** A cube of {@code side³} spheres, loosely spaced and jittered, above the floor of a square box. */
     private static State block(int side, double radius, double mass, double width, double height) {
@@ -107,10 +143,23 @@ enum Scenario {
         return s;
     }
 
-    /** Where every sphere starts, and the box: all a simulation is started from. */
+    /** The quaternion that turns by {@code angle} about {@code axis}, {@code (x, y, z, w)}. */
+    private static double[] axisAngle(double[] axis, double angle) {
+        double length = Math.sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+        double sin = Math.sin(angle / 2) / length;
+        return new double[] {axis[0] * sin, axis[1] * sin, axis[2] * sin, Math.cos(angle / 2)};
+    }
+
+    /**
+     * Where every body starts, the box they are in, and the gravity: all a simulation is started from. Spheres have
+     * radii; boxes have half-extents, orientations and spins instead, and {@link #boxes} says which.
+     */
     static final class State {
         final int n;
         final double[] extent;
+        final boolean boxes;
+        /** Gravity along y, in metres per second squared. */
+        final double gravity;
         final float[] x;
         final float[] y;
         final float[] z;
@@ -119,10 +168,20 @@ enum Scenario {
         final float[] w;
         final float[] r;
         final float[] im;
+        /** A box's half-extents, {@code hx, hy, hz}; its orientation, {@code qx, qy, qz, qw}; its angular velocity. */
+        final float[][] half;
+        final float[][] q;
+        final float[][] spin;
 
         State(int n, double sx, double sy, double sz) {
+            this(n, sx, sy, sz, false, -9.81);
+        }
+
+        private State(int n, double sx, double sy, double sz, boolean boxes, double gravity) {
             this.n = n;
             extent = new double[] {sx, sy, sz};
+            this.boxes = boxes;
+            this.gravity = gravity;
             x = new float[n];
             y = new float[n];
             z = new float[n];
@@ -131,6 +190,31 @@ enum Scenario {
             w = new float[n];
             r = new float[n];
             im = new float[n];
+            half = new float[3][n];
+            q = new float[4][n];
+            spin = new float[3][n];
+            java.util.Arrays.fill(q[3], 1);
+        }
+
+        /** {@code n} boxes in a box of this size, under {@code gravity} along y. */
+        static State boxes(int n, double sx, double sy, double sz, double gravity) {
+            return new State(n, sx, sy, sz, true, gravity);
+        }
+
+        void box(int k, double px, double py, double pz, double hx, double hy, double hz, double mass,
+                 double[] turn, double[] omega) {
+            x[k] = (float) px;
+            y[k] = (float) py;
+            z[k] = (float) pz;
+            im[k] = (float) (1 / mass);
+            double[] h = {hx, hy, hz};
+            for (int a = 0; a < 3; a++) {
+                half[a][k] = (float) h[a];
+                spin[a][k] = (float) omega[a];
+            }
+            for (int j = 0; j < 4; j++) {
+                q[j][k] = (float) turn[j];
+            }
         }
 
         void place(int k, double px, double py, double pz, double radius, double mass) {

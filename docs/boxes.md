@@ -1,6 +1,6 @@
 # Boxes: a contact manifold, and stacking measured
 
-Planned on 2026-10-19. Stages 1 and 2 are built; the rest is not yet. The plan follows the sphere work: each stage is
+Planned on 2026-10-19. Stages 1 to 3 are built; the rest is not yet. The plan follows the sphere work: each stage is
 built far enough to be measured against a known answer, and records what it found under its own heading. Where a
 measurement changes the plan, the stage says how.
 
@@ -141,11 +141,48 @@ A box sliding down the 30° slope leans 8.5e-5 rad while it slides. Every subste
 before the corners are corrected, and the corners are not corrected evenly, because the friction under the box tips
 it forward. The lean is that unevenness, and it goes when the box stops.
 
-### 3. The picture, and the demo
+### 3. The picture, and the demo — built (2026-10-19)
 
-A box is drawn by a slab test in its own frame, with the orientation blended between steps as the spheres' is. The
-`shown` layout is the spheres' with half-extents in place of the radius. The demo gets a body-shape setting, and
-scenarios for a tumbling box and a box dropped on a corner. Squashing is for spheres only.
+**Core.** `Boxes.show`, once at the end of a step, keeps each box's centre and orientation before the step and after
+it, with its half-extents, `Boxes.SHOWN_STRIDE` (20) floats a box. Its layout is its own, not the spheres': a box has
+no pressing, and needs a turn and three extents where a sphere has a radius. `BoxShowTest`, both backends, checks that
+the "after" slots hold the state the step ended on and the "before" slots the step before's.
+
+**The picture.** `BoxShader` meets each box with the slab test in its own frame:
+
+- The centre is blended between the two steps as a sphere's is, and the orientation by normalised lerp, the short way
+  round.
+- The ray is turned into the box's frame by a rotation that divides by `|q|²`, so the blended quaternion needs no
+  normalising.
+- A sphere around each box is tested first, so a pixel runs the slab test only on boxes it may meet nearer than
+  anything yet.
+- The face the ray entered by is the normal.
+- A band along each edge, 6% of the smallest half-extent, is drawn darker, so that a box's turn reads even where two
+  faces are lit alike.
+
+The camera's ray, the sky, the floor and the light moved out of `SphereShader` into `Picture`, which both shaders use.
+
+**The stack, generalised over the shape.** The spheres' path through the GUI had sphere-specific names and types
+throughout:
+
+- `RigidSimulation` is what a picture and the stepping thread need of either simulation. `SphereSimulation` and the
+  new `BoxSimulation` implement it.
+- A ring's `Generation` says its `Shape` and body count. `ShownSlots` copies however many words a simulation's
+  `shown` has; the keep kernel was always a plain copy.
+- `RigidRunner` (was `SphereRunner`) installs either kind.
+- `RigidView` (was `SphereView`) makes one pipeline a shape, as it first draws that shape.
+
+**The demo.** The physics lane builds a sphere or a box simulation as the scenario holds, and the readings show what
+fits: a box's moving energy, the part of it in turning, and its fastest centre. Two scenarios:
+
+- *Spinning box*: no gravity, 5 rad/s about the middle axis, nudged about the shortest. It turns over every 3.4 s,
+  stage 1's flip, there to watch.
+- *Dropped boxes*: six boxes of different shapes, turned and dropped onto their corners. Each settles on a face. They
+  are spaced so that they never meet, because boxes do not meet each other yet.
+
+Boxes take only the substeps and friction controls; a box scenario rebuilt for new substeps starts over rather than
+carrying its state. Squashing is for spheres only. Seen with `ottermate` on this GPU: the spinning box turns over
+between 1 s and 3.5 s, and the dropped boxes rest flat, each edge drawn.
 
 ### 4. Box against box: the narrow phase
 

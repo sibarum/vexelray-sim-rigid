@@ -381,6 +381,71 @@ public final class Boxes {
         });
     }
 
+    // --- for a picture -------------------------------------------------------------------------------------
+
+    /**
+     * Floats per box in {@code shown}: the centre before the step and after it, each with a spare word; the
+     * half-extents and a spare; then the orientation before the step and after it.
+     */
+    public static final int SHOWN_STRIDE = 20;
+    /** Where in a box's {@code shown} its centre before the step starts, and after it. */
+    public static final int CENTRE_BEFORE = 0;
+    public static final int CENTRE_AFTER = 4;
+    /** Where its half-extents are. */
+    public static final int HALF = 8;
+    /** Where its orientation before the step starts, and after it. */
+    public static final int TURNED_BEFORE = 12;
+    public static final int TURNED_AFTER = 16;
+
+    static final String[] SHOW_NAMES = {"x", "y", "z", "qx", "qy", "qz", "qw", "hx", "hy", "hz", "shown"};
+    static final List<Buffer> SHOW_BUFFERS = bind(SHOW_NAMES);
+
+    /**
+     * One invocation per box, at the end of a step: the centre and orientation the last step ended on moved to the
+     * "before" slots of {@code shown}, and this step's put in the "after" slots, with the half-extents. A picture
+     * blends the two by how far the frame is between the steps, as it does a sphere's.
+     */
+    public static Function show() {
+        List<Buffer> bs = SHOW_BUFFERS;
+        Buffer shown = bs.get(10);
+        Body b = new Body();
+        LocalVar s = b.let("s", new Expr.InvocationId());
+        b.when(lt(v(s), new Expr.InvocationCount()), t -> {
+            LocalVar base = t.let("base", mul(v(s), i(SHOWN_STRIDE)));
+            for (int a = 0; a < 3; a++) {
+                t.store(shown, add(v(base), i(CENTRE_BEFORE + a)), load(shown, add(v(base), i(CENTRE_AFTER + a))));
+                t.store(shown, add(v(base), i(CENTRE_AFTER + a)), load(bs.get(a), v(s)));
+                t.store(shown, add(v(base), i(HALF + a)), load(bs.get(7 + a), v(s)));
+            }
+            for (int k = 0; k < 4; k++) {
+                t.store(shown, add(v(base), i(TURNED_BEFORE + k)), load(shown, add(v(base), i(TURNED_AFTER + k))));
+                t.store(shown, add(v(base), i(TURNED_AFTER + k)), load(bs.get(3 + k), v(s)));
+            }
+        });
+        return function("boxesShow", b);
+    }
+
+    /**
+     * {@code shown} as a picture would first be given it, from the starting state: before and after both the start,
+     * so the first frame does not blend from nowhere. {@code q} is {@code qx, qy, qz, qw}, {@code half}
+     * {@code hx, hy, hz}.
+     */
+    public static float[] shownAtStart(float[] x, float[] y, float[] z, float[][] q, float[][] half) {
+        float[] shown = new float[SHOWN_STRIDE * x.length];
+        float[][] at = {x, y, z};
+        for (int s = 0; s < x.length; s++) {
+            int base = SHOWN_STRIDE * s;
+            for (int a = 0; a < 3; a++) {
+                shown[base + CENTRE_BEFORE + a] = shown[base + CENTRE_AFTER + a] = at[a][s];
+                shown[base + HALF + a] = half[a][s];
+            }
+            for (int k = 0; k < 4; k++) {
+                shown[base + TURNED_BEFORE + k] = shown[base + TURNED_AFTER + k] = q[k][s];
+            }
+        }
+        return shown;
+    }
+
     static final String[] VELOCITY_NAMES = {"u", "v", "w", "lx", "ly", "lz", "dx", "dy", "dz", "jx", "jy", "jz",
             "params"};
     static final List<Buffer> VELOCITY_BUFFERS = bind(VELOCITY_NAMES);

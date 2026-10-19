@@ -1,6 +1,6 @@
 package dev.vexelray.sim.rigid.demo;
 
-import dev.vexelray.sim.rigid.gui.SphereRunner;
+import dev.vexelray.sim.rigid.gui.RigidRunner;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
 import sibarum.kronometer.Ratio;
 
@@ -68,7 +68,7 @@ final class Controls {
     private double squash = 3.0;
     private int substeps = 10;
     private int iterations = 1;
-    private SphereRunner.Backend backend = SphereRunner.Backend.QUEUE;
+    private RigidRunner.Backend backend = RigidRunner.Backend.QUEUE;
     private Ratio speed = Ratio.of(1, 1);
     private boolean paused;
     private boolean reset;
@@ -163,11 +163,11 @@ final class Controls {
         version++;
     }
 
-    synchronized SphereRunner.Backend backend() {
+    synchronized RigidRunner.Backend backend() {
         return backend;
     }
 
-    synchronized void backend(SphereRunner.Backend b) {
+    synchronized void backend(RigidRunner.Backend b) {
         backend = b;
         version++;
     }

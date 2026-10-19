@@ -33,7 +33,7 @@ import java.util.Map;
  * compute queue), the buffers are ones the window can draw from, and a picture is handed its steps by {@link ShownSlots}.
  * Without one, it runs on a device of its own.
  */
-public final class SphereSimulation implements AutoCloseable {
+public final class SphereSimulation implements RigidSimulation {
 
     /**
      * What a step took.
@@ -98,6 +98,21 @@ public final class SphereSimulation implements AutoCloseable {
 
     public int spheres() {
         return step.spheres;
+    }
+
+    @Override
+    public ShownRing.Shape shape() {
+        return ShownRing.Shape.SPHERES;
+    }
+
+    @Override
+    public int bodies() {
+        return step.spheres;
+    }
+
+    @Override
+    public int shownWords() {
+        return Spheres.SHOWN_STRIDE * step.spheres;
     }
 
     public int substeps() {
@@ -178,6 +193,7 @@ public final class SphereSimulation implements AutoCloseable {
     }
 
     /** {@link #step}, and waits for all of it: what a thread that runs steps back to back on its own queue does. */
+    @Override
     public StepReport stepAndWait() {
         return run(true);
     }
@@ -247,22 +263,26 @@ public final class SphereSimulation implements AutoCloseable {
      * The last step's {@code shown}, read back to the host: what a picture on another device is handed, through
      * {@link ShownSlots}. On the CPU, a copy of the array; on a GPU, a staged read that waits for the step.
      */
+    @Override
     public int[] readShown() {
         return runner.read("shown");
     }
 
     /** Where this simulation runs, for whoever reports it: the device's name, or the CPU. */
+    @Override
     public String where() {
         return accelerator == null ? "the CPU (Truffle)" : accelerator.capabilities().deviceName();
     }
 
     /** The resident {@code shown}, for {@link ShownSlots} to copy from on the same device; null on the CPU. */
-    ResidentBuffer shown() {
+    @Override
+    public ResidentBuffer shown() {
         return runner.onDevice() ? runner.resident("shown") : null;
     }
 
     /** The accelerator the simulation runs on; null on the CPU. */
-    Accelerator accelerator() {
+    @Override
+    public Accelerator accelerator() {
         return accelerator;
     }
 

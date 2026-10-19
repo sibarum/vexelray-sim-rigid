@@ -11,7 +11,7 @@ import dev.vexelray.gui.widget.TitleBar;
 import dev.vexelray.sim.core.gui.DemoLook;
 import dev.vexelray.sim.core.gui.Orbit;
 import dev.vexelray.sim.core.gui.OrbitControl;
-import dev.vexelray.sim.rigid.gui.SphereView;
+import dev.vexelray.sim.rigid.gui.RigidView;
 import sibarum.tactroller.api.Key;
 
 /**
@@ -28,7 +28,7 @@ final class Ui implements AutoCloseable {
 
     private final Node canvas;
     private final Node body;
-    private final SphereView view;
+    private final RigidView view;
     private final OrbitControl orbitControl;
     private final Readings readings;
     private final Panel panel;
@@ -40,7 +40,7 @@ final class Ui implements AutoCloseable {
                 .clip(true)
                 .background(gui.theme().color(Role.WELL));
         gui.landmark("view", canvas);
-        view = new SphereView(canvas, VIEW_PIXELS, orbit);
+        view = new RigidView(canvas, VIEW_PIXELS, orbit);
         orbitControl = new OrbitControl(gui, canvas, orbit);
         readings = new Readings(gui);
         panel = new Panel(gui, controls, readings);
@@ -57,7 +57,7 @@ final class Ui implements AutoCloseable {
         keys(gui, controls, orbit);
     }
 
-    SphereView view() {
+    RigidView view() {
         return view;
     }
 

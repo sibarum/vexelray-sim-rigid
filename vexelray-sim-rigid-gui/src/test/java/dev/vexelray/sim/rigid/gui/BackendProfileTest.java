@@ -9,7 +9,7 @@ import dev.vexelray.gui.harness.HarnessApp;
 import dev.vexelray.os.WindowConfig;
 import dev.vexelray.sim.core.gui.AppCompute;
 import dev.vexelray.sim.core.gui.Orbit;
-import dev.vexelray.sim.rigid.gui.SphereRunner.Backend;
+import dev.vexelray.sim.rigid.gui.RigidRunner.Backend;
 import dev.vexelray.sim.rigid.sphere.SphereGrid;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
 import dev.vexelray.sim.rigid.sphere.Spheres;
@@ -88,7 +88,7 @@ class BackendProfileTest {
         Gui gui = new Gui();
         Node box = gui.box().width(Length.dp(512)).height(Length.dp(512));
         gui.root().children(box);
-        SphereView view = new SphereView(box, 512, new Orbit());
+        RigidView view = new RigidView(box, 512, new Orbit());
         ShownRing ring = new ShownRing();
         Kron kron = Kron.driven();
         long origin = System.nanoTime();
@@ -118,7 +118,7 @@ class BackendProfileTest {
                 GuiApp.Compute.OWN_QUEUE, eachFrame)) {
             application[0] = harness.app();
             GpuContext render = onLoop(harness, () -> AppCompute.on(harness.app().lendComputeQueue()).orElseThrow());
-            SphereRunner runner = new SphereRunner(render, ring);
+            RigidRunner runner = new RigidRunner(render, ring);
             try {
                 for (Case c : cases) {
                     results.add(run(c, harness, kron, world, runner, recording, frameTimes));
@@ -158,7 +158,7 @@ class BackendProfileTest {
     }
 
     /** One case: built on its backend, warmed, then measured while the frame loop draws it. */
-    private static Result run(Case c, HarnessApp harness, Kron kron, Dilated[] world, SphereRunner runner,
+    private static Result run(Case c, HarnessApp harness, Kron kron, Dilated[] world, RigidRunner runner,
                               AtomicBoolean recording, List<Long> frameTimes) throws Exception {
         Semaphore due = new Semaphore(0);
         Dilated clock = onLoop(harness, () -> {
@@ -193,7 +193,7 @@ class BackendProfileTest {
                         due.tryAcquire(20, TimeUnit.MILLISECONDS);
                         continue;
                     }
-                    SphereRunner.Kept kept = runner.step();
+                    RigidRunner.Kept kept = runner.step();
                     clock.finished(kept.finishedNanos());
                     if (measuring.get()) {
                         sums[0]++;

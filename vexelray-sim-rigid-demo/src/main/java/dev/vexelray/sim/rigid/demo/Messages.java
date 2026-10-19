@@ -1,6 +1,6 @@
 package dev.vexelray.sim.rigid.demo;
 
-import dev.vexelray.sim.rigid.gui.SphereRunner;
+import dev.vexelray.sim.rigid.gui.RigidRunner;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
 import sibarum.atchung.Topic;
 
@@ -30,7 +30,7 @@ final class Messages {
      */
     record Build(Scenario scenario, SphereStep.Solve solve, int substeps, int iterations, boolean carry, double omega,
                  boolean averaged, double restitution, double friction, double rolling,
-                 SphereRunner.Backend backend) {
+                 RigidRunner.Backend backend) {
     }
 
     /**
