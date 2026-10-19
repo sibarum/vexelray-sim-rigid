@@ -391,7 +391,10 @@ contacts a step unsolved on the pile of 4096.
       frame, and paints the four octants where the product of its coordinates is positive paler: a beach ball. In the
       demo's *Heap of 343* at μ = 0.5 the spheres that rolled out lie at every angle; at none they all face alike.
       `SpinTest` checks that the buffer carries the orientation each step ended on, and the one before.
-- [ ] **Boxes**: orientation, a contact manifold, and stacking measured the way the column is.
+- [ ] **Boxes**: orientation, a contact manifold, and stacking measured the way the column is. Planned, in seven
+      stages, in [boxes.md](boxes.md): a package of their own, contacts found once a step and kept through its
+      substeps as anchors in each body's frame, one invocation a pair's whole manifold, and a harmonic overhang among
+      the measures.
 - [ ] **Fixed point against f32**, as the fluid's scatter was measured. The velocity finding above is a reason to
       look: f32 positions already cost something here.
 - [ ] **The budgeted clock** (`dev.vexelray.sim.core.time.Clock`) driving the step, as it drives the shallow-water
