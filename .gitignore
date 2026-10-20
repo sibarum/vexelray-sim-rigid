@@ -30,3 +30,4 @@ target/
 
 # Screenshots taken while developing
 screenshots/
+.claude/
