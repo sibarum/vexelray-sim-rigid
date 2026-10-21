@@ -7,10 +7,11 @@ queue of its own, to the CPU) and says so in the readings, but the dropdown stil
 for. On llvmpipe it reads *This GPU* while the physics runs on the CPU. Make the dropdown show what is actually
 running, or mark the unavailable entries, so the control and the readings agree.
 
-## CPU fallback stalls the drawing thread
+## The picture's pipeline is compiled on the drawing thread
 
-With no compute queue of its own, every step's copy into the picture is handed to the main thread
-(`ComputeQueue.drawingQueue`). On llvmpipe that showed as 0.5–0.9 s stalls there, mostly at setup (the keep kernel's
-compile in `ShownSlots`) and then in each copy waiting for its turn between frames. Only the queue submissions need
-the main thread: look at building `ShownSlots` (allocations, kernel registration) on the physics lane and handing
-over only the submits.
+`RigidView.show` builds the picture's graphics pipeline the first time a frame needs it, on the main thread: the
+fragment shader's SPIR-V, generated in Java (about 260 ms the first time on the VM, 11 ms after), and the driver's
+compile of it (most of the rest; on llvmpipe the first frame held the main thread for about 890 ms in all). Both can
+happen elsewhere: generate the SPIR-V on a lane as soon as the shape is known (it is pure), and create the pipeline
+off the main thread once `ViewportTarget.pipelineFor` is known to be safe there (`vkCreateGraphicsPipelines` is; what
+the target holds may not be), drawing nothing new until it is ready. Real GPUs feel it less, but every one pays it.

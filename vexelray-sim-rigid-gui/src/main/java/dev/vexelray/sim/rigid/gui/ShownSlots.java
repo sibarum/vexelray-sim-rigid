@@ -23,12 +23,14 @@ import java.util.List;
  *   <li><b>Beside it</b> ({@link #beside}): the simulation computes on the device the picture is drawn on, so a step
  *       is kept by a copy on the GPU, from its {@code shown} to a slot. Nothing crosses the bus.</li>
  *   <li><b>Elsewhere</b> ({@link #on}): on another GPU, or on the CPU. A step's {@code shown} is read back to the host
- *       and written here, then copied into the slot on this device. That round trip is what
- *       running elsewhere costs, and it is measured.</li>
+ *       and written here, into mapped memory where it is, then copied into the slot on this device. That round trip
+ *       is what running elsewhere costs, and it is measured.</li>
  * </ul>
  *
  * <p>Either way the copy into the slot signals the timeline at the step's value, on the GPU, so the picture's wait for
- * it is the same. The stepping thread's, as the simulation is.
+ * it is the same. The stepping thread's, as the simulation is: made, {@linkplain #take taken} into, awaited and
+ * closed there. Only {@link #submit} touches the queue, so where the queue is the one that draws, that is the one
+ * call the thread that draws has to make.
  */
 public final class ShownSlots implements AutoCloseable {
 
@@ -50,7 +52,8 @@ public final class ShownSlots implements AutoCloseable {
         this.ownsAccelerator = ownsAccelerator;
         this.shape = shape;
         this.bodies = bodies;
-        this.incoming = shown == null ? accelerator.allocate(Body.F32, words) : null;
+        // Mapped, so a step is written where it is (poke): no staging, no submission, and nothing for the queue.
+        this.incoming = shown == null ? accelerator.allocateReadout(Body.F32, words) : null;
         this.source = shown != null ? shown : incoming;
         this.keeper = accelerator.register(new KernelSpec(Spheres.keep(), List.of(
                 KernelColumn.output("shown", 0, Spheres.KEEP_BUFFERS.get(0).element()).withLength(words),
@@ -87,14 +90,33 @@ public final class ShownSlots implements AutoCloseable {
 
     /**
      * Keeps {@code sim}'s last step in slot {@code slot}, and sets the timeline to {@code value} once it is there, on
-     * the GPU. From another device or the CPU, the step is read back and written here first, which waits.
+     * the GPU: {@link #take}, then {@link #submit}.
      *
      * @return the copy's completion: the step is the picture's to take once it is done
      */
     public Completion keep(int slot, long value, RigidSimulation sim) {
+        take(sim);
+        return submit(slot, value);
+    }
+
+    /**
+     * From another device or the CPU, {@code sim}'s last step read back and written here, ready for {@link #submit}
+     * to copy; beside it, nothing. No submission: any thread that holds these slots, once the last copy is awaited.
+     */
+    public void take(RigidSimulation sim) {
         if (incoming != null) {
-            incoming.write(sim.readShown());
+            incoming.poke(sim.readShown());
         }
+    }
+
+    /**
+     * The copy of the step last {@linkplain #take taken} into slot {@code slot}, setting the timeline to
+     * {@code value} once it is there: one submission, and no wait. Wherever submitting to this device's queue is
+     * allowed.
+     *
+     * @return the copy's completion: await it from the stepping thread before the next {@link #take}
+     */
+    public Completion submit(int slot, long value) {
         return keeps[slot].run(List.of(), List.of(timeline.at(value)));
     }
 

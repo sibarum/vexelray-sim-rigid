@@ -1,5 +1,6 @@
 package dev.vexelray.sim.rigid.gui;
 
+import dev.supirvast.vastir.tools.Completion;
 import dev.supirvast.vastir.tools.GpuContext;
 import dev.vexelray.sim.rigid.box.BoxStep;
 import dev.vexelray.sim.rigid.sphere.SphereStep;
@@ -65,7 +66,9 @@ public final class RigidRunner implements AutoCloseable {
     /**
      * Where work on the picture's queue is submitted from. With a queue of its own, that is whichever thread runs the
      * simulation; with the queue that draws, it is only the thread that draws, which orders it with the frames by
-     * submission, as every submission there is ordered.
+     * submission, as every submission there is ordered. Only the submission is handed over ({@link
+     * ShownSlots#submit}): making the slots, writing a step into them, waiting for the copy and freeing them stay on
+     * the stepping thread, which is waiting meanwhile, so the context is never used from two threads at once.
      */
     @FunctionalInterface
     public interface PictureQueue {
@@ -140,21 +143,19 @@ public final class RigidRunner implements AutoCloseable {
             case INTEGRATED -> onGpu.apply(integrated());
             case CPU -> onCpu.get();
         };
-        ShownSlots[] madeSlots = new ShownSlots[1];
+        ShownSlots madeSlots;
         try {
             start.accept(made);
-            pictureQueue.run(() -> madeSlots[0] = backend == Backend.QUEUE ? ShownSlots.beside(made)
-                    : ShownSlots.on(render, made));
+            madeSlots = backend == Backend.QUEUE ? ShownSlots.beside(made) : ShownSlots.on(render, made);
         } catch (RuntimeException | Error e) {
             made.close();
             throw e;
         }
         sim = made;
-        slots = madeSlots[0];
+        slots = madeSlots;
         generation++;
         kept = 1;
-        ShownSlots first = slots;
-        pictureQueue.run(() -> first.keep(0, kept, made).await());
+        keep(slots, 0, kept, made);
         sims.put(generation, sim);
         slotsOf.put(generation, slots);
         ring.install(slots.generation(generation, extent));
@@ -185,9 +186,7 @@ public final class RigidRunner implements AutoCloseable {
         kept++;
         ShownSlots now = slots;
         RigidSimulation running = sim;
-        int back = ring.back();
-        long value = kept;
-        pictureQueue.run(() -> now.keep(back, value, running).await());
+        keep(now, ring.back(), kept, running);
         long published = System.nanoTime();
         ring.publish(kept, published);
         for (ShownRing.Generation old : ring.retired()) {
@@ -196,10 +195,18 @@ public final class RigidRunner implements AutoCloseable {
         return new Kept(report, published - done, published);
     }
 
+    /** {@code sim}'s step into {@code slot}: written and waited for here, submitted where the picture's queue takes it. */
+    private void keep(ShownSlots into, int slot, long value, RigidSimulation from) {
+        into.take(from);
+        Completion[] copy = new Completion[1];
+        pictureQueue.run(() -> copy[0] = into.submit(slot, value));
+        copy[0].await();
+    }
+
     private void free(long id) {
         ShownSlots oldSlots = slotsOf.remove(id);
         if (oldSlots != null) {
-            pictureQueue.run(oldSlots::close);
+            oldSlots.close();
         }
         RigidSimulation oldSim = sims.remove(id);
         if (oldSim != null) {

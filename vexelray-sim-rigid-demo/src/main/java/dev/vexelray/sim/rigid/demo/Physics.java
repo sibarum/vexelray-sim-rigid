@@ -70,8 +70,6 @@ final class Physics implements AutoCloseable {
     private final GpuContext context;
     private final RigidRunner runner;
     private final String noQueue;
-    /** Where the picture's queue takes work: anywhere, or, on the queue that draws, the thread that draws. */
-    private final RigidRunner.PictureQueue pictureQueue;
 
     /** The running simulation, and the same as one of the two kinds it is, the other null. */
     private RigidSimulation sim;
@@ -107,15 +105,14 @@ final class Physics implements AutoCloseable {
         GpuContext own = AppCompute.on(queue).orElse(null);
         if (own != null) {
             this.context = own;
-            this.pictureQueue = RigidRunner.PictureQueue.OWN;
             this.runner = new RigidRunner(own, ring);
         } else {
             // No queue of its own (llvmpipe has one family; so do some GPUs): the physics runs on the CPU, and only
-            // its steps' copies into the picture go to the queue that draws, from the thread that draws.
+            // the submissions of its steps' copies into the picture go to the queue that draws, from the thread that
+            // draws. Everything else, the context included, stays here.
             DrawingQueue drawing = queue.drawingQueue().orElse(null);
             this.context = drawing == null ? null : AppCompute.on(drawing);
-            this.pictureQueue = drawing == null ? RigidRunner.PictureQueue.OWN : drawing::run;
-            this.runner = context == null ? null : RigidRunner.onDrawingQueue(context, ring, pictureQueue);
+            this.runner = context == null ? null : RigidRunner.onDrawingQueue(context, ring, drawing::run);
         }
         this.noQueue = context == null
                 ? "No queue that computes on this GPU (" + queue.why() + "), so there is no physics to draw." : "";
@@ -291,7 +288,7 @@ final class Physics implements AutoCloseable {
             runner.close();
         }
         if (context != null) {
-            pictureQueue.run(context::close);
+            context.close();   // no submission: off the thread that draws, like everything but the copies
         }
     }
 }
