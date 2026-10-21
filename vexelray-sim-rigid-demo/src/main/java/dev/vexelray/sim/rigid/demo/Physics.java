@@ -5,6 +5,7 @@ import dev.vexelray.framework.api.Component;
 import dev.vexelray.framework.api.Overflow;
 import dev.vexelray.framework.api.Subscribe;
 import dev.vexelray.gui.core.app.ComputeQueue;
+import dev.vexelray.gui.core.app.DrawingQueue;
 import dev.vexelray.sim.core.gui.AppCompute;
 import dev.vexelray.sim.rigid.demo.Messages.Build;
 import dev.vexelray.sim.rigid.demo.Messages.Next;
@@ -69,6 +70,8 @@ final class Physics implements AutoCloseable {
     private final GpuContext context;
     private final RigidRunner runner;
     private final String noQueue;
+    /** Where the picture's queue takes work: anywhere, or, on the queue that draws, the thread that draws. */
+    private final RigidRunner.PictureQueue pictureQueue;
 
     /** The running simulation, and the same as one of the two kinds it is, the other null. */
     private RigidSimulation sim;
@@ -101,10 +104,21 @@ final class Physics implements AutoCloseable {
         this.world = world;
         // On the timeline, as a step comes due: a sample, so a burst of them is one wake.
         world.onDue(() -> bus.publish(Messages.NEXT_TOPIC, new Next()));
-        this.context = AppCompute.on(queue).orElse(null);
-        this.runner = context == null ? null : new RigidRunner(context, ring);
+        GpuContext own = AppCompute.on(queue).orElse(null);
+        if (own != null) {
+            this.context = own;
+            this.pictureQueue = RigidRunner.PictureQueue.OWN;
+            this.runner = new RigidRunner(own, ring);
+        } else {
+            // No queue of its own (llvmpipe has one family; so do some GPUs): the physics runs on the CPU, and only
+            // its steps' copies into the picture go to the queue that draws, from the thread that draws.
+            DrawingQueue drawing = queue.drawingQueue().orElse(null);
+            this.context = drawing == null ? null : AppCompute.on(drawing);
+            this.pictureQueue = drawing == null ? RigidRunner.PictureQueue.OWN : drawing::run;
+            this.runner = context == null ? null : RigidRunner.onDrawingQueue(context, ring, pictureQueue);
+        }
         this.noQueue = context == null
-                ? "No compute queue of its own (" + queue.why() + "), so there is no physics to draw." : "";
+                ? "No queue that computes on this GPU (" + queue.why() + "), so there is no physics to draw." : "";
         if (context == null) {
             news.report(new PhysicsNews.Report(scenario, false, 0, 0, 0, 0, null, 0, 0, 0, "",
                     SphereStep.Solve.JACOBI, 0, 0, 0, noQueue, null, 0, null));
@@ -131,9 +145,12 @@ final class Physics implements AutoCloseable {
             install(from, b, backend);
             problem = "";
         } catch (IllegalStateException none) {
-            // No such device here: say so, and run where the picture is instead.
-            problem = backend.label + " is not here (" + none.getMessage() + "), so this runs on this GPU.";
-            install(from, b, RigidRunner.Backend.QUEUE);
+            // No such device here: say so, and run where the picture is instead, or, beside the queue that draws, on
+            // the CPU.
+            RigidRunner.Backend instead = runner.onDrawingQueue() ? RigidRunner.Backend.CPU : RigidRunner.Backend.QUEUE;
+            problem = backend.label + " is not here (" + none.getMessage() + "), so this runs on "
+                    + (instead == RigidRunner.Backend.CPU ? "the CPU." : "this GPU.");
+            install(from, b, instead);
         }
         state = from;
         if (!carry) {
@@ -274,7 +291,7 @@ final class Physics implements AutoCloseable {
             runner.close();
         }
         if (context != null) {
-            context.close();
+            pictureQueue.run(context::close);
         }
     }
 }

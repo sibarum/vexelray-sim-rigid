@@ -63,12 +63,50 @@ public final class RigidRunner implements AutoCloseable {
     private long kept;
 
     /**
+     * Where work on the picture's queue is submitted from. With a queue of its own, that is whichever thread runs the
+     * simulation; with the queue that draws, it is only the thread that draws, which orders it with the frames by
+     * submission, as every submission there is ordered.
+     */
+    @FunctionalInterface
+    public interface PictureQueue {
+        /** Run {@code work} where submitting to the picture's queue is allowed, and return once it has run. */
+        void run(Runnable work);
+
+        /** Any thread may submit: a queue of the simulation's own. */
+        PictureQueue OWN = Runnable::run;
+    }
+
+    private final PictureQueue pictureQueue;
+    private final boolean drawingQueue;
+
+    /**
      * @param render the picture's device, on the queue this thread was lent: where every ring lives, and where
      *               {@link Backend#QUEUE} simulations run
      */
     public RigidRunner(GpuContext render, ShownRing ring) {
+        this(render, ring, PictureQueue.OWN, false);
+    }
+
+    /**
+     * On the queue that draws, where the application lent no queue of its own: {@code render} submits to it, so only
+     * {@code pictureQueue} may, and only to keep and free the picture's slots. A simulation cannot run its kernels
+     * there from its own thread, so {@link Backend#QUEUE} is refused; the CPU and another device still run, their
+     * steps handed to the picture through the host.
+     */
+    public static RigidRunner onDrawingQueue(GpuContext render, ShownRing ring, PictureQueue pictureQueue) {
+        return new RigidRunner(render, ring, pictureQueue, true);
+    }
+
+    private RigidRunner(GpuContext render, ShownRing ring, PictureQueue pictureQueue, boolean drawingQueue) {
         this.render = render;
         this.ring = ring;
+        this.pictureQueue = pictureQueue;
+        this.drawingQueue = drawingQueue;
+    }
+
+    /** Whether this runs beside the queue that draws, where {@link Backend#QUEUE} cannot run. */
+    public boolean onDrawingQueue() {
+        return drawingQueue;
     }
 
     /**
@@ -93,24 +131,30 @@ public final class RigidRunner implements AutoCloseable {
 
     private <S extends RigidSimulation> S install(Backend backend, double[] extent, Consumer<S> start,
                                                   Function<GpuContext, S> onGpu, Supplier<S> onCpu) {
+        if (backend == Backend.QUEUE && drawingQueue) {
+            throw new IllegalStateException("the application lent no queue of its own, and the one that draws takes"
+                    + " work only from the thread that draws");
+        }
         S made = switch (backend) {
             case QUEUE -> onGpu.apply(render);
             case INTEGRATED -> onGpu.apply(integrated());
             case CPU -> onCpu.get();
         };
-        ShownSlots madeSlots;
+        ShownSlots[] madeSlots = new ShownSlots[1];
         try {
             start.accept(made);
-            madeSlots = backend == Backend.QUEUE ? ShownSlots.beside(made) : ShownSlots.on(render, made);
+            pictureQueue.run(() -> madeSlots[0] = backend == Backend.QUEUE ? ShownSlots.beside(made)
+                    : ShownSlots.on(render, made));
         } catch (RuntimeException | Error e) {
             made.close();
             throw e;
         }
         sim = made;
-        slots = madeSlots;
+        slots = madeSlots[0];
         generation++;
         kept = 1;
-        slots.keep(0, kept, sim).await();
+        ShownSlots first = slots;
+        pictureQueue.run(() -> first.keep(0, kept, made).await());
         sims.put(generation, sim);
         slotsOf.put(generation, slots);
         ring.install(slots.generation(generation, extent));
@@ -139,7 +183,11 @@ public final class RigidRunner implements AutoCloseable {
         SphereSimulation.StepReport report = sim.stepAndWait();
         long done = System.nanoTime();
         kept++;
-        slots.keep(ring.back(), kept, sim).await();
+        ShownSlots now = slots;
+        RigidSimulation running = sim;
+        int back = ring.back();
+        long value = kept;
+        pictureQueue.run(() -> now.keep(back, value, running).await());
         long published = System.nanoTime();
         ring.publish(kept, published);
         for (ShownRing.Generation old : ring.retired()) {
@@ -151,7 +199,7 @@ public final class RigidRunner implements AutoCloseable {
     private void free(long id) {
         ShownSlots oldSlots = slotsOf.remove(id);
         if (oldSlots != null) {
-            oldSlots.close();
+            pictureQueue.run(oldSlots::close);
         }
         RigidSimulation oldSim = sims.remove(id);
         if (oldSim != null) {
