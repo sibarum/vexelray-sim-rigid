@@ -19,6 +19,11 @@
         "icon": "vexelray-sim-rigid-demo/src/main/rc/rigid-sim.ico",
         "shortcuts": { "desktop": true, "startMenu": true, "label": "Rigid Sim" }
       },
+      {
+        "name": "rigid-sim-ffmpeg-record",
+        "source": "vexelray-sim-rigid-demo/target/rigid-sim-ffmpeg-record-windows-x86_64.zip",
+        "dir": "ffmpeg-record"
+      },
       { "name": "notices", "source": "THIRD-PARTY-NOTICES.txt" }
     ]
   }
