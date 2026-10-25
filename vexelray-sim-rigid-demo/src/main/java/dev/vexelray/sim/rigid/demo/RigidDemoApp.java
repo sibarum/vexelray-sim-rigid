@@ -12,8 +12,8 @@ import dev.vexelray.framework.automation.AutomationStarter;
  * port open or not and anything connected now or earlier; {@code --automation.available=none} leaves them out of a
  * run altogether. The processor generates {@code RigidDemoAppWiring} from this.
  */
-@VexelApp(name = RigidDemo.APP, title = RigidDemo.TITLE, width = RigidDemo.W, height = RigidDemo.H,
-        starters = AutomationStarter.class)
+@VexelApp(name = RigidDemo.APP, formerNames = RigidDemo.FORMER, title = RigidDemo.TITLE, width = RigidDemo.W,
+        height = RigidDemo.H, starters = AutomationStarter.class)
 final class RigidDemoApp {
 
     private RigidDemoApp() {
